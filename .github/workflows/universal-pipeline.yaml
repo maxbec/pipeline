@@ -224,7 +224,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # fetch-depth 2 lets the docs-only detector compare HEAD against
           # its parent on push events. PR events use the Files API and
@@ -743,7 +743,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Required for TruffleHog (security scan)
 
@@ -999,7 +999,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔧 Setup Environment
         uses: navigaite/.github/.github/actions/setup-environment@v3
@@ -1162,7 +1162,7 @@ jobs:
       name: ${{ matrix.environment }}
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔧 Setup Node Runtime
         if: needs.setup.outputs.stack == 'nodejs'
@@ -1273,7 +1273,7 @@ jobs:
       name: ${{ matrix.environment }}
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🚀 Deploy to DigitalOcean
         uses: navigaite/.github/.github/actions/deploy-digitalocean@v3
@@ -1322,7 +1322,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔍 Resolve Image Metadata
         id: resolve
@@ -1449,7 +1449,7 @@ jobs:
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔍 Resolve prerelease config
         id: prerelease
@@ -1553,7 +1553,7 @@ jobs:
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
