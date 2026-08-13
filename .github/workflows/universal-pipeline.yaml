@@ -125,6 +125,14 @@ on:
         required: false
       INFISICAL_SECRET_PATH:
         required: false
+      # Cloudflare Access service-token headers for self-hosted Infisical
+      # instances gated by CF Access (e.g. infisical.navigaite.de). Sent as
+      # extra headers on the Infisical action's login and secret-read
+      # requests; harmless when empty or when the domain has no Access gate.
+      CF_ACCESS_CLIENT_ID:
+        required: false
+      CF_ACCESS_CLIENT_SECRET:
+        required: false
 
 # NOTE: Calling workflows must grant the permissions each job actually uses:
 #   setup:     contents: read, pull-requests: read (PR Files API for docs-only detection)
@@ -1105,6 +1113,9 @@ jobs:
           env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🔐 Load Infisical Secrets (Universal Auth)
         if: needs.setup.outputs.enable-build == 'true' && steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
@@ -1117,6 +1128,9 @@ jobs:
           env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🏗️ Run Build
         if: needs.setup.outputs.enable-build == 'true'
@@ -1221,6 +1235,9 @@ jobs:
           env-slug: ${{ steps.infisical-config.outputs.env-slug }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🔐 Load Infisical Secrets (Universal Auth)
         if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
@@ -1233,6 +1250,9 @@ jobs:
           env-slug: ${{ steps.infisical-config.outputs.env-slug }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🚀 Deploy to Vercel
         uses: navigaite/.github/.github/actions/deploy-vercel@v3
