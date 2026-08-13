@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0-beta.18](https://github.com/navigaite/.github/compare/v3.3.0-beta.17...v3.3.0-beta.18) (2026-08-13)
+
+
+### ✨ Features
+
+* **pipeline:** pass Cloudflare Access service-token headers to Infisical ([#290](https://github.com/navigaite/.github/issues/290)) ([91d5a6c](https://github.com/navigaite/.github/commit/91d5a6c4f167218193edf7f59e2933959e41ef67))
+
 ## [3.3.0-beta.17](https://github.com/navigaite/.github/compare/v3.3.0-beta.16...v3.3.0-beta.17) (2026-07-26)
 
 

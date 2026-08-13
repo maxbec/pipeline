@@ -1,6 +1,6 @@
 # CLAUDE.md — Navigaite Universal CI/CD Pipeline
 
-> Organization-wide reusable GitHub Actions pipeline (`navigaite/.github`), currently at **v2** (version 3.3.0-beta.17). <!-- x-release-please-version -->
+> Organization-wide reusable GitHub Actions pipeline (`navigaite/.github`), currently at **v2** (version 3.3.0-beta.18). <!-- x-release-please-version -->
 
 All project-specific guidance for coding agents lives in [AGENTS.md](./AGENTS.md) at the repository root (agent-include directive: `@AGENTS.md`). That file is the single source of truth for:
 
