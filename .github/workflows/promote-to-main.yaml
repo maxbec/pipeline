@@ -36,6 +36,14 @@ name: 📤 Promote dev → main
 # and an open-but-stale promotion PR is rebuilt in place (same PR number), so
 # exactly one current promotion PR is open whenever `dev` is ahead of `main`.
 # Auto mode still never merges the promotion PR — that stays the human button.
+#
+# Auto mode picks the promotion style per situation, so both Branch Guard
+# styles work: when `dev` merges into `main` cleanly, the PR is opened with
+# head `dev` directly (no branch push — also sidesteps the App `workflows`
+# permission needed to push workflow-file changes, and some Flama Branch
+# Guards only accept `dev`/`hotfix/*`/`release-please--*` heads on `main`).
+# Only when a raw merge would conflict (release-managed files after a stable
+# release) does it build the pre-resolved `promote/*` staging branch.
 
 on:
   workflow_call:
@@ -166,24 +174,47 @@ jobs:
           BASE_SHA=$(git rev-parse "origin/$BASE")
           HEAD_SHA=$(git rev-parse "origin/$HEAD")
 
-          # Precondition 3: an already open promotion PR (head is a `promote/*`
-          # branch targeting BASE). Manual mode skips — the open PR is the
-          # promotion. Auto mode keeps that PR current instead: when its staged
-          # merge no longer matches the current BASE/HEAD tips, the staging
-          # branch is rebuilt in place (same head branch, same PR number).
+          # Commit summary since BASE — the promotion PR body doubles as the
+          # release preview for the human pressing the button.
+          SUMMARY=$(git log --no-merges --pretty='- %h %s' "origin/$BASE..origin/$HEAD" | head -n 50)
+          TOTAL=$(git log --no-merges --oneline "origin/$BASE..origin/$HEAD" | wc -l)
+          if [[ "$TOTAL" -gt 50 ]]; then
+            SUMMARY=$(printf '%s\n- … and %s more commit(s)' "$SUMMARY" "$((TOTAL - 50))")
+          fi
+
+          # Precondition 3: an already open promotion PR — head is `promote/*`
+          # or HEAD itself (direct-style promotion). Manual mode skips — the
+          # open PR is the promotion. Auto mode keeps it current instead: a
+          # direct HEAD-head PR tracks the branch by itself and only needs its
+          # body refreshed; a stale `promote/*` staging branch is rebuilt in
+          # place (same head branch, same PR number).
           EXISTING_JSON=$(gh pr list --repo "$REPO" --base "$BASE" --state open \
             --json url,headRefName,number \
-            --jq '[.[] | select(.headRefName | startswith("promote/"))][0] // empty')
+            | jq -c --arg head "$HEAD" \
+              '[.[] | select((.headRefName | startswith("promote/")) or .headRefName == $head)][0] // empty')
           EXISTING_NUMBER=""
           if [[ -n "$EXISTING_JSON" ]]; then
             EXISTING_URL=$(jq -r '.url' <<<"$EXISTING_JSON")
+            EXISTING_HEAD=$(jq -r '.headRefName' <<<"$EXISTING_JSON")
+            EXISTING_NUMBER=$(jq -r '.number' <<<"$EXISTING_JSON")
             if [[ "$AUTO" != "true" ]]; then
               echo "::notice::Promotion PR already open: $EXISTING_URL"
               echo "Promotion PR already open: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            EXISTING_NUMBER=$(jq -r '.number' <<<"$EXISTING_JSON")
-            PROMOTE_BRANCH=$(jq -r '.headRefName' <<<"$EXISTING_JSON")
+            if [[ "$EXISTING_HEAD" == "$HEAD" ]]; then
+              # Direct promotion PR: GitHub already shows the current diff;
+              # refresh the body so the commit summary matches.
+              BODY=$(printf '%s\n\n%s\n\n%s\n' \
+                "Automated promotion of $AHEAD commit(s) from \`$HEAD\` to \`$BASE\`." \
+                "### Commits since \`$BASE\`" \
+                "$SUMMARY")
+              gh pr edit "$EXISTING_NUMBER" --repo "$REPO" --body "$BODY" >/dev/null
+              echo "::notice::Promotion PR refreshed (direct $HEAD → $BASE): $EXISTING_URL"
+              echo "Promotion PR refreshed: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            PROMOTE_BRANCH="$EXISTING_HEAD"
             git fetch origin "refs/heads/$PROMOTE_BRANCH"
             P1=$(git rev-parse -q --verify 'FETCH_HEAD^1' 2>/dev/null || true)
             P2=$(git rev-parse -q --verify 'FETCH_HEAD^2' 2>/dev/null || true)
@@ -194,6 +225,25 @@ jobs:
             fi
             echo "::notice::Refreshing stale promotion PR $EXISTING_URL (staged merge is behind $HEAD/$BASE)."
           else
+            # No promotion PR yet. In auto mode prefer the direct style when
+            # HEAD merges cleanly into BASE: no branch push (no App `workflows`
+            # permission needed for workflow-file changes) and a head accepted
+            # by every Branch Guard variant. The `promote/*` staging branch is
+            # only for merges that conflict on release-managed files.
+            if [[ "$AUTO" == "true" ]] \
+              && git merge-tree --write-tree "origin/$BASE" "origin/$HEAD" >/dev/null 2>&1; then
+              BODY=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+                "Automated promotion of $AHEAD commit(s) from \`$HEAD\` to \`$BASE\`." \
+                "### Commits since \`$BASE\`" \
+                "$SUMMARY" \
+                "Merge via **Merge commit** (not squash) to preserve conventional commit history.")
+              URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$HEAD" \
+                --title "chore: promote $HEAD → $BASE" \
+                --body "$BODY")
+              echo "Opened: $URL"
+              echo "Opened promotion PR (direct): [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             PROMOTE_BRANCH="promote/${BASE}-$(git rev-parse --short "origin/$HEAD")"
           fi
 
@@ -262,14 +312,6 @@ jobs:
             --jq '.sha')
           gh api -X PATCH "repos/$REPO/git/refs/heads/$PROMOTE_BRANCH" \
             -f "sha=$SIGNED" -F "force=true" >/dev/null
-
-          # Commit summary since BASE — the promotion PR body doubles as the
-          # release preview for the human pressing the button.
-          SUMMARY=$(git log --no-merges --pretty='- %h %s' "origin/$BASE..origin/$HEAD" | head -n 50)
-          TOTAL=$(git log --no-merges --oneline "origin/$BASE..origin/$HEAD" | wc -l)
-          if [[ "$TOTAL" -gt 50 ]]; then
-            SUMMARY=$(printf '%s\n- … and %s more commit(s)' "$SUMMARY" "$((TOTAL - 50))")
-          fi
 
           NOTE="Release-managed files (changelog, version manifests, extra-files) were auto-resolved"
           NOTE+=" to \`$BASE\`; all other changes merged normally. Merge via the GitHub UI using"
