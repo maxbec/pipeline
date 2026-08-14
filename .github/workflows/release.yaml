@@ -18,175 +18,37 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    outputs:
-      release-created: ${{ steps.release.outputs.release_created }}
-      release-tag: ${{ steps.release.outputs.tag_name }}
-      release-version: ${{ steps.release.outputs.version }}
-      release-major: ${{ steps.release.outputs.major }}
-      release-minor: ${{ steps.release.outputs.minor }}
-      release-patch: ${{ steps.release.outputs.patch }}
     steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🔍 Check for GitHub App secrets
-        id: check-app
-        shell: bash
-        env:
-          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-        run: |
-          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            missing=()
-            [[ -z "$APP_ID" ]] && missing+=("WORKFLOW_APP_ID")
-            [[ -z "$APP_PRIVATE_KEY" ]] && missing+=("WORKFLOW_APP_PRIVATE_KEY")
-            echo "::warning::${missing[*]} not set — falling back to GITHUB_TOKEN. Auto-merged PRs won't trigger follow-up workflows."
-          fi
-
-      - name: 🔑 Generate GitHub App token
-        id: app-token
-        if: steps.check-app.outputs.available == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.WORKFLOW_APP_ID }}
-          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
       - name: 📦 Run Release Please
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           config-file: .github/release-please-config.json
           manifest-file: .release-please-manifest.json
           target-branch: main
 
-      # NOTE: This workflow cuts the STABLE (main) release. The stable
-      # release-please PR and the dev→main promotion are board-only — CI must
-      # never auto-enable merge on them (and squash is the wrong method for
-      # main, which uses merge commits). Auto-merge of the beta release PR lives
-      # in release-dev.yaml, where squash on dev is correct.
+      # NOTE: GITHUB_TOKEN is sufficient in this repo (no rulesets, no
+      # required checks). Known limitation: PRs created by GITHUB_TOKEN do
+      # not trigger workflows — acceptable since nothing is required to
+      # merge the release PR. The stable release PR itself remains
+      # board-only: agents never merge it.
 
-  update-major-tag:
-    name: 🏷️ Update Major Version Tag
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: write
-    needs: release-please
-    # Run regardless of the release-please step outcome. release-please creates
-    # the GitHub release + tag first, then builds the *next* release PR; a
-    # transient GraphQL error in that second phase exits the step non-zero and
-    # used to strand the rolling tags (v<MAJOR>/latest) because this job was
-    # gated on release-created. We now derive the target from the newest stable
-    # tag reachable on main and reconcile every run, so a failed/re-run release
-    # or any plain main push self-heals drift. Skips only on cancellation.
-    if: ${{ !cancelled() }}
-    steps:
-      - name: 🔍 Check for GitHub App secrets
-        id: check-app
-        shell: bash
+      - name: 🏷️ Move floating major tag
+        if: steps.release.outputs.release_created == 'true'
         env:
-          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-          APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-        run: |
-          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GitHub App secrets not set — tag updates may fail due to tag protection rules."
-          fi
-
-      - name: 🔑 Generate GitHub App token
-        id: app-token
-        if: steps.check-app.outputs.available == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.WORKFLOW_APP_ID }}
-          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
-
-      - name: 🏷️ Reconcile rolling tags from newest stable tag on main
-        id: reconcile
-        shell: bash
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.release.outputs.sha }}
+          MAJOR: ${{ steps.release.outputs.major }}
+          TAG: ${{ steps.release.outputs.tag_name }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Target = newest STABLE semver tag reachable on the current branch
-          # (main), derived from git rather than this run's release-please
-          # output. This is independent of whether release-please reported a new
-          # release, so it self-heals when a release was published but the
-          # rolling-tag update was skipped (release-please exited non-zero after
-          # creating the release, or the job was re-run with release_created=false).
-          # The glob narrows candidates; the regex enforces full vX.Y.Z and
-          # excludes the rolling tags themselves (`v3`, `latest`) and prereleases.
-          # `|| true` guards against pipefail/SIGPIPE: `head` closing after one
-          # line can kill `grep` (141), and a no-match `grep` exits 1 — either
-          # would abort under `set -e` before the empty-check below runs.
-          LATEST_TAG="$(
-            git tag --list 'v[0-9]*' --merged HEAD --sort=-v:refname \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-              | head -n1 || true
-          )"
-
-          if [[ -z "${LATEST_TAG}" ]]; then
-            echo "::notice::No stable semver tag reachable on main — nothing to reconcile."
-            echo "latest_tag=" >> "$GITHUB_OUTPUT"
-            exit 0
+          echo "Moving v${MAJOR} to ${SHA} (${TAG})"
+          if ! gh api -X PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/v${MAJOR}" \
+            -f sha="${SHA}" -F force=true; then
+            # Tag does not exist yet (first release of a new major) — create it
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/v${MAJOR}" -f sha="${SHA}"
           fi
-
-          MAJOR="${LATEST_TAG#v}"
-          MAJOR="${MAJOR%%.*}"
-          TARGET_SHA="$(git rev-parse "${LATEST_TAG}^{commit}")"
-          echo "Newest stable tag on main: ${LATEST_TAG} (${TARGET_SHA})"
-
-          CHANGED=false
-          for ROLLING_TAG in "v${MAJOR}" "latest"; do
-            CURRENT_SHA="$(git rev-parse -q --verify "${ROLLING_TAG}^{commit}" || true)"
-            if [[ "${CURRENT_SHA}" == "${TARGET_SHA}" ]]; then
-              echo "✅ ${ROLLING_TAG} already at ${LATEST_TAG}"
-              continue
-            fi
-            echo "Updating ${ROLLING_TAG}: ${CURRENT_SHA:-<none>} → ${TARGET_SHA} (${LATEST_TAG})"
-            git tag -f "${ROLLING_TAG}" "${LATEST_TAG}"
-            git push --force origin "refs/tags/${ROLLING_TAG}"
-            echo "✅ ${ROLLING_TAG} → ${LATEST_TAG}"
-            CHANGED=true
-          done
-
-          {
-            echo "latest_tag=${LATEST_TAG}"
-            echo "major=${MAJOR}"
-            echo "reconciled=${CHANGED}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: 📋 Summary
-        if: steps.reconcile.outputs.latest_tag != ''
-        shell: bash
-        env:
-          TAG: ${{ steps.reconcile.outputs.latest_tag }}
-          MAJOR: ${{ steps.reconcile.outputs.major }}
-          RECONCILED: ${{ steps.reconcile.outputs.reconciled }}
-        run: |
-          set -euo pipefail
-          {
-            echo "### 🏷️ Rolling Tags Reconciled"
-            echo ""
-            echo "| | |"
-            echo "|:---|:---|"
-            echo "| **Stable Tag** | \`${TAG}\` |"
-            echo "| **Major Tag** | \`v${MAJOR}\` → \`${TAG}\` |"
-            echo "| **Latest Tag** | \`latest\` → \`${TAG}\` |"
-            echo "| **Updated this run** | \`${RECONCILED}\` |"
-            echo ""
-            echo "Consumers using \`@v${MAJOR}\` or \`@latest\` now get \`${TAG}\`."
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "✅ v${MAJOR} → ${TAG} (${SHA})"
