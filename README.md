@@ -276,7 +276,17 @@ release:
   type: node
   sync_to_dev: true
   sync_target_branch: dev
+  auto_promotion_pr: true    # keep a dev → main promotion PR open when dev is ahead
+  auto_release_merge: true   # arm auto-merge on the stable release PR on main
 ```
+
+**One-button release** (repos with a `dev` branch): feature PRs auto-merge into
+`dev`; the pipeline keeps a `dev` → `main` promotion PR open and current; the
+promotion PR is the only PR a human ever merges. After that merge everything is
+automatic — the stable release-please PR on `main` auto-merges once its checks
+are green, the GitHub release and tag publish, and the dev manifest reconciles.
+See `release.auto_promotion_pr` / `release.auto_release_merge` in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 **Stage `enable:` vs. caller `skip-*` inputs:** the caller workflow can also pass
 `skip-security` / `skip-lint` / `skip-test` / `skip-build` / `skip-deploy` as
