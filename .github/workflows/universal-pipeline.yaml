@@ -161,7 +161,7 @@ jobs:
   # =============================================================================
   setup:
     name: 🔧 Setup & Configuration
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -1150,7 +1150,7 @@ jobs:
   # =============================================================================
   deploy-vercel:
     name: 🚀 Vercel / ${{ matrix.environment }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1268,7 +1268,7 @@ jobs:
 
   deploy-digitalocean:
     name: 🚀 DigitalOcean / ${{ matrix.environment }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -1423,7 +1423,7 @@ jobs:
   # =============================================================================
   release:
     name: 📦 Release Management
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 15
     permissions:
       contents: write
@@ -1535,7 +1535,7 @@ jobs:
   # squash PR. It is a no-op for non-dual-track repos. See NAV-50.
   sync-to-dev:
     name: 🔄 Reconcile Dev Manifest
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: write
@@ -1616,7 +1616,7 @@ jobs:
     name: 🚦 Pipeline Gate
     if: always()
     needs: [setup, static-checks, verify]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
     timeout-minutes: 2
     permissions: {}
     steps:
