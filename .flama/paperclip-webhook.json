@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "repository": "navigaite/.github",
-  "company": "// Navigaite",
-  "projectId": "37a1c817-ec99-44ed-94d7-48de2d777749",
-  "workspaceId": "c0027cc1-df00-4ba6-a01e-371116f4cff7",
-  "appSlug": "flama-delivery-navigaite",
+  "repository": "maxbec/pipeline",
+  "company": "Private",
+  "projectId": "d3f336d9-7eec-4ebf-8a58-ed2c2c201406",
+  "workspaceId": "39a7037d-e74a-457f-af45-bf3a016b3722",
+  "appSlug": "flama-delivery-maxbec",
   "events": [
     "check_run",
     "deployment_status",
