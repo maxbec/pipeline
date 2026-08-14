@@ -1,0 +1,104 @@
+---
+name: 🤖 Release PR Auto-merge
+
+# One-button release, steps 2+3 — for THIS repo. After a promotion lands on
+# main, release.yaml (GITHUB_TOKEN release-please) opens or updates the stable
+# release PR. This workflow arms GitHub auto-merge on that PR with the App
+# token so the release lands without a second human merge, and the App's merge
+# push re-runs release.yaml, which publishes the GitHub release, the version
+# tag, and the rolling v<MAJOR> tag the fleet consumes.
+#
+# It arms; it never bypasses. Every required check (Check Gate, Flama Branch
+# Guard) is still enforced by GitHub at merge time. Promotion PRs are never
+# touched: only `release-please*` heads are considered — merging the
+# promotion PR stays the human release button.
+#
+# GITHUB_TOKEN-authored PRs get no pull_request workflow runs (GitHub's
+# anti-recursion rule), so the release PR's required checks never report on
+# their own. A close/reopen performed with the App token re-fires them
+# legitimately — no check is skipped or weakened.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-automerge-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  arm:
+    name: Arm release PR auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 🔑 Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.WORKFLOW_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+
+      - name: 🤖 Arm auto-merge on the stable release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # release.yaml runs on the same push and needs a moment to open or
+          # update the release PR — poll briefly before concluding no-op.
+          PR_NUMBER=""
+          for _ in 1 2 3 4 5 6; do
+            PR_NUMBER=$(gh pr list --repo "$REPO" --base main --state open \
+              --json number,headRefName \
+              --jq '[.[] | select(.headRefName | startswith("release-please"))][0].number // empty')
+            [[ -n "$PR_NUMBER" ]] && break
+            sleep 20
+          done
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "::notice::No open release PR on main — nothing to arm."
+            exit 0
+          fi
+
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json headRefOid --jq .headRefOid)
+
+          # Re-fire required checks that were suppressed because the PR was
+          # authored with GITHUB_TOKEN (see header). App-performed close and
+          # reopen emits real pull_request events, so Check Gate and Branch
+          # Guard run and report on the head SHA.
+          CHECKS=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs" \
+            --jq '.total_count')
+          if [[ "$CHECKS" -eq 0 ]]; then
+            echo "No check runs on $HEAD_SHA — re-firing via App close/reopen of PR #$PR_NUMBER."
+            gh pr close "$PR_NUMBER" --repo "$REPO"
+            sleep 5
+            gh pr reopen "$PR_NUMBER" --repo "$REPO"
+          fi
+
+          # main merges with a merge commit (squash is for dev).
+          if gh pr merge "$PR_NUMBER" --repo "$REPO" --merge --auto 2>"$RUNNER_TEMP/arm.err"; then
+            echo "✅ Auto-merge armed on release PR #$PR_NUMBER."
+            exit 0
+          fi
+          if grep -qiE 'already enabled|auto merge is already' "$RUNNER_TEMP/arm.err"; then
+            echo "✅ Auto-merge already armed on release PR #$PR_NUMBER."
+            exit 0
+          fi
+          # A PR that is already green cannot be armed ("clean status"); merge
+          # it directly through the REST endpoint, which still enforces every
+          # branch protection at merge time. This also resolves the known
+          # stale-BLOCKED-with-all-green GraphQL state.
+          if grep -qiE 'clean status|not in the correct state' "$RUNNER_TEMP/arm.err"; then
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/merge" -f merge_method=merge
+            echo "✅ Release PR #$PR_NUMBER merged directly (was already green)."
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/arm.err" >&2
+          exit 1
