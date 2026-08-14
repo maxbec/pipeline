@@ -43,5 +43,5 @@ jobs:
       contains(github.event.comment.body, '@claude') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                github.event.comment.author_association)
-    uses: navigaite/.github/.github/workflows/claude-code.yaml@v2
+    uses: maxbec/pipeline/.github/workflows/claude-code.yaml@v2
     secrets: inherit

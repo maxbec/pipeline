@@ -21,5 +21,5 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: navigaite/.github/.github/workflows/trunk-upgrade.yaml@v2
+    uses: maxbec/pipeline/.github/workflows/trunk-upgrade.yaml@v2
     secrets: inherit

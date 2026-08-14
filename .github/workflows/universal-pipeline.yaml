@@ -561,7 +561,7 @@ jobs:
 
       - name: 🔍 Setup Environment
         id: setup-env
-        uses: navigaite/.github/.github/actions/setup-environment@v3
+        uses: maxbec/pipeline/.github/actions/setup-environment@v3
         with:
           stack: ${{ inputs.stack != '' && inputs.stack || steps.parse-config.outputs.configured-stack }}
           node-version: ${{ steps.parse-config.outputs.runtime-node-version }}
@@ -757,7 +757,7 @@ jobs:
 
       - name: 🔍 Security Scanning
         if: needs.setup.outputs.enable-security == 'true'
-        uses: navigaite/.github/.github/actions/security-scan@v3
+        uses: maxbec/pipeline/.github/actions/security-scan@v3
         with:
           enable-trufflehog: ${{ needs.setup.outputs.enable-trufflehog }}
           enable-dependency-review: ${{ needs.setup.outputs.enable-dependency-review }}
@@ -767,7 +767,7 @@ jobs:
       # --- Lint (shares this runner with security; each step guarded) ---
       - name: 🔧 Setup Environment
         if: needs.setup.outputs.enable-lint == 'true'
-        uses: navigaite/.github/.github/actions/setup-environment@v3
+        uses: maxbec/pipeline/.github/actions/setup-environment@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           node-version: ${{ needs.setup.outputs.runtime-version }}
@@ -779,7 +779,7 @@ jobs:
 
       - name: 📦 Install Dependencies
         if: needs.setup.outputs.enable-lint == 'true'
-        uses: navigaite/.github/.github/actions/install-dependencies@v3
+        uses: maxbec/pipeline/.github/actions/install-dependencies@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           package-manager: ${{ needs.setup.outputs.package-manager }}
@@ -911,7 +911,7 @@ jobs:
       - name: 🧹 Run Lint
         id: fallback-lint
         if: needs.setup.outputs.enable-lint == 'true' && steps.detect-trunk.outputs.enabled != 'true'
-        uses: navigaite/.github/.github/actions/run-lint@v3
+        uses: maxbec/pipeline/.github/actions/run-lint@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           lint-command: ${{ needs.setup.outputs.lint-command }}
@@ -1010,7 +1010,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔧 Setup Environment
-        uses: navigaite/.github/.github/actions/setup-environment@v3
+        uses: maxbec/pipeline/.github/actions/setup-environment@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           node-version: ${{ needs.setup.outputs.runtime-version }}
@@ -1021,7 +1021,7 @@ jobs:
           enable-caching: ${{ needs.setup.outputs.enable-caching }}
 
       - name: 📦 Install Dependencies
-        uses: navigaite/.github/.github/actions/install-dependencies@v3
+        uses: maxbec/pipeline/.github/actions/install-dependencies@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           package-manager: ${{ needs.setup.outputs.package-manager }}
@@ -1030,7 +1030,7 @@ jobs:
 
       - name: 🧪 Run Tests
         if: needs.setup.outputs.enable-test == 'true'
-        uses: navigaite/.github/.github/actions/run-tests@v3
+        uses: maxbec/pipeline/.github/actions/run-tests@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           test-command: ${{ needs.setup.outputs.test-command }}
@@ -1134,7 +1134,7 @@ jobs:
 
       - name: 🏗️ Run Build
         if: needs.setup.outputs.enable-build == 'true'
-        uses: navigaite/.github/.github/actions/run-build@v3
+        uses: maxbec/pipeline/.github/actions/run-build@v3
         with:
           stack: ${{ needs.setup.outputs.stack }}
           build-command: ${{ needs.setup.outputs.build-command }}
@@ -1255,7 +1255,7 @@ jobs:
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🚀 Deploy to Vercel
-        uses: navigaite/.github/.github/actions/deploy-vercel@v3
+        uses: maxbec/pipeline/.github/actions/deploy-vercel@v3
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
@@ -1296,7 +1296,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🚀 Deploy to DigitalOcean
-        uses: navigaite/.github/.github/actions/deploy-digitalocean@v3
+        uses: maxbec/pipeline/.github/actions/deploy-digitalocean@v3
         with:
           digitalocean-token: ${{ secrets.DIGITALOCEAN_TOKEN }}
           app-name:
@@ -1405,7 +1405,7 @@ jobs:
           echo "EOF" >> "$GITHUB_OUTPUT"
 
       - name: 🚀 Deploy Docker Image
-        uses: navigaite/.github/.github/actions/deploy-docker@v3
+        uses: maxbec/pipeline/.github/actions/deploy-docker@v3
         with:
           dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
           context: ${{ matrix.image.context || '.' }}
@@ -1509,7 +1509,7 @@ jobs:
 
       - name: 📦 Run Release Management
         id: release-mgmt
-        uses: navigaite/.github/.github/actions/release-management@v3
+        uses: maxbec/pipeline/.github/actions/release-management@v3
         with:
           github-token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           npm-token: ${{ secrets.NPM_TOKEN }}
@@ -1579,7 +1579,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: 🔄 Reconcile Dev Manifest
-        uses: navigaite/.github/.github/actions/sync-branches@v3
+        uses: maxbec/pipeline/.github/actions/sync-branches@v3
         with:
           source-branch: main
           target-branch: ${{ needs.setup.outputs.sync-target-branch }}
