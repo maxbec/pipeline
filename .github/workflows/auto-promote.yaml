@@ -1,0 +1,39 @@
+---
+name: 🔁 Auto Promotion PR
+
+# One-button release, step 1 — for THIS repo. Whenever dev is ahead of main,
+# keep a dev → main promotion PR open and current. Merging that PR is the one
+# human action in the release flow; nothing here ever merges it. Reuses the
+# local promote machinery in auto mode: soft-skip while a release-please PR
+# is open on dev, refresh a stale promotion PR in place (same PR number).
+#
+# Product repos get the equivalent behaviour from the universal pipeline's
+# `promotion-pr` job; this repo cannot call its own universal pipeline, so it
+# calls the reusable promote workflow at the local ref instead.
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-promote-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    # Local reference: runs the promote machinery from this very commit, so
+    # dev changes to it are exercised before they are promoted and tagged.
+    uses: ./.github/workflows/promote-to-main.yaml
+    with:
+      auto: true
+    # Exactly the App credential pair is forwarded, by name: an app-authored
+    # promotion PR triggers its required checks, which a github.token-authored
+    # PR never does (GitHub's anti-recursion rule).
+    secrets:
+      WORKFLOW_APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
+      WORKFLOW_APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
