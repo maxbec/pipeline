@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0-beta.20](https://github.com/maxbec/pipeline/compare/v3.3.0-beta.19...v3.3.0-beta.20) (2026-08-14)
+
+
+### 🐛 Bug Fixes
+
+* **promote:** direct dev-head promotion PR when the merge is clean (auto mode) ([#12](https://github.com/maxbec/pipeline/issues/12)) ([99237a6](https://github.com/maxbec/pipeline/commit/99237a670e8ba57769f43639b6aa754443850a16))
+
 ## [3.3.0-beta.19](https://github.com/maxbec/pipeline/compare/v3.3.0-beta.18...v3.3.0-beta.19) (2026-08-14)
 
 
