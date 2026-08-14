@@ -1,23 +1,12 @@
 # Changelog
 
-## [3.3.0-beta.20](https://github.com/maxbec/pipeline/compare/v3.3.0-beta.19...v3.3.0-beta.20) (2026-08-14)
+## [3.4.0](https://github.com/maxbec/pipeline) (2026-08-14)
 
+Stable promotion of the 3.3.0-beta line. Highlights:
 
-### 🐛 Bug Fixes
-
-* **promote:** direct dev-head promotion PR when the merge is clean (auto mode) ([#12](https://github.com/maxbec/pipeline/issues/12)) ([99237a6](https://github.com/maxbec/pipeline/commit/99237a670e8ba57769f43639b6aa754443850a16))
-
-## [3.3.0-beta.19](https://github.com/maxbec/pipeline/compare/v3.3.0-beta.18...v3.3.0-beta.19) (2026-08-14)
-
-
-### ✨ Features
-
-* one-button release — auto promotion PR, stable release PR auto-merge, back-merge wiring ([#10](https://github.com/maxbec/pipeline/issues/10)) ([3f85bf1](https://github.com/maxbec/pipeline/commit/3f85bf16bada04b37e62026b08c163f59b4a6cf1))
-
-
-### 🐛 Bug Fixes
-
-* **flama:** rehome delivery contract to maxbec/pipeline ([#4](https://github.com/maxbec/pipeline/issues/4)) ([903497f](https://github.com/maxbec/pipeline/commit/903497f425d14e0523a6759900247ef9e9d78836))
+* **pipeline:** pass Cloudflare Access service-token headers to Infisical (#290)
+* **ci:** adopt Flama delivery platform 0.5.3 gates (#282, #284, #287, #289)
+* rehomed from navigaite/.github to maxbec/pipeline
 
 ## [3.3.0-beta.18](https://github.com/navigaite/.github/compare/v3.3.0-beta.17...v3.3.0-beta.18) (2026-08-13)
 
