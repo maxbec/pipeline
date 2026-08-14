@@ -1,5 +1,20 @@
 # Changelog
 
+## [3.5.0](https://github.com/maxbec/pipeline/compare/v3.4.1...v3.5.0) (2026-08-14)
+
+
+### ✨ Features
+
+* one-button release — auto promotion PR, stable release PR auto-merge, back-merge wiring ([#10](https://github.com/maxbec/pipeline/issues/10)) ([3f85bf1](https://github.com/maxbec/pipeline/commit/3f85bf16bada04b37e62026b08c163f59b4a6cf1))
+* **scripts:** new-repo provisioning script (paved road for new repos) ([2ec280c](https://github.com/maxbec/pipeline/commit/2ec280ccda34790849af0071763bca1e9683f844))
+
+
+### 🐛 Bug Fixes
+
+* **flama:** rehome delivery contract to maxbec/pipeline ([#4](https://github.com/maxbec/pipeline/issues/4)) ([903497f](https://github.com/maxbec/pipeline/commit/903497f425d14e0523a6759900247ef9e9d78836))
+* **promote:** direct dev-head promotion PR when the merge is clean (auto mode) ([#12](https://github.com/maxbec/pipeline/issues/12)) ([99237a6](https://github.com/maxbec/pipeline/commit/99237a670e8ba57769f43639b6aa754443850a16))
+* **release:** decouple the dev beta release track from stable-track files ([#14](https://github.com/maxbec/pipeline/issues/14)) ([2b836e6](https://github.com/maxbec/pipeline/commit/2b836e6f6cb17b86421dcb8a936121541ae92fe5))
+
 ## [3.4.0](https://github.com/maxbec/pipeline) (2026-08-14)
 
 Stable promotion of the 3.3.0-beta line. Highlights:
