@@ -17,3 +17,5 @@ case "$1" in
     exit 2
     ;;
 esac
+
+# Flama onboarding verification: delivery entrypoint for maxbec/pipeline (2026-08-14).
