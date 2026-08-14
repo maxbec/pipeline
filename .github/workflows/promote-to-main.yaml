@@ -30,6 +30,20 @@ name: 📤 Promote dev → main
 # to `main` to fire the universal pipeline (deploy + Sentry release). The board
 # merges the `promote/* → main` PR via the GitHub UI (a GitHub-signed merge
 # commit, satisfying `required_signatures` on `main`).
+#
+# In `auto` mode (one-button release flow, called from the universal pipeline
+# on every push to `dev`): unmet preconditions soft-skip instead of failing,
+# and an open-but-stale promotion PR is rebuilt in place (same PR number), so
+# exactly one current promotion PR is open whenever `dev` is ahead of `main`.
+# Auto mode still never merges the promotion PR — that stays the human button.
+#
+# Auto mode picks the promotion style per situation, so both Branch Guard
+# styles work: when `dev` merges into `main` cleanly, the PR is opened with
+# head `dev` directly (no branch push — also sidesteps the App `workflows`
+# permission needed to push workflow-file changes, and some Flama Branch
+# Guards only accept `dev`/`hotfix/*`/`release-please--*` heads on `main`).
+# Only when a raw merge would conflict (release-managed files after a stable
+# release) does it build the pre-resolved `promote/*` staging branch.
 
 on:
   workflow_call:
@@ -44,6 +58,25 @@ on:
         required: false
         type: string
         default: main
+      auto:
+        description: >-
+          Automation mode for the one-button release flow. Preconditions that
+          are not met soft-skip (exit 0) instead of failing, and an already
+          open promotion PR whose staged merge is stale relative to the
+          current `head`/`base` tips is refreshed in place instead of skipped.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      # Declared so nested callers (e.g. the universal pipeline's
+      # promotion-pr job) can forward the App credential pair by name.
+      # `secrets: inherit` callers are unaffected.
+      WORKFLOW_APP_ID:
+        description: GitHub App id used to author the promotion PR
+        required: false
+      WORKFLOW_APP_PRIVATE_KEY:
+        description: Private key of the same GitHub App
+        required: false
 
 # `contents: write` is required to push the `promote/*` staging branch and to
 # create the signed merge commit via the Git Data API.
@@ -110,6 +143,7 @@ jobs:
           HEAD: ${{ inputs.head }}
           BASE: ${{ inputs.base }}
           REPO: ${{ github.repository }}
+          AUTO: ${{ inputs.auto }}
         run: |
           set -euo pipefail
 
@@ -122,6 +156,10 @@ jobs:
             --json headRefName \
             --jq '[.[] | select(.headRefName | startswith("release-please"))] | length')
           if [[ "$OPEN_RP" -gt 0 ]]; then
+            if [[ "$AUTO" == "true" ]]; then
+              echo "::notice::Open release-please PR on $HEAD — promotion deferred until it is merged."
+              exit 0
+            fi
             echo "::error::Open release-please PR on $HEAD. Merge or close it before promoting."
             exit 1
           fi
@@ -133,20 +171,81 @@ jobs:
             exit 0
           fi
 
-          # Precondition 3: skip if a promotion PR is already open (its head is a
-          # `promote/*` branch targeting BASE).
-          EXISTING=$(gh pr list --repo "$REPO" --base "$BASE" --state open \
-            --json url,headRefName \
-            --jq '[.[] | select(.headRefName | startswith("promote/"))][0].url // empty')
-          if [[ -n "$EXISTING" ]]; then
-            echo "::notice::Promotion PR already open: $EXISTING"
-            echo "Promotion PR already open: [$EXISTING]($EXISTING)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
           BASE_SHA=$(git rev-parse "origin/$BASE")
           HEAD_SHA=$(git rev-parse "origin/$HEAD")
-          PROMOTE_BRANCH="promote/${BASE}-$(git rev-parse --short "origin/$HEAD")"
+
+          # Commit summary since BASE — the promotion PR body doubles as the
+          # release preview for the human pressing the button.
+          SUMMARY=$(git log --no-merges --pretty='- %h %s' "origin/$BASE..origin/$HEAD" | head -n 50)
+          TOTAL=$(git log --no-merges --oneline "origin/$BASE..origin/$HEAD" | wc -l)
+          if [[ "$TOTAL" -gt 50 ]]; then
+            SUMMARY=$(printf '%s\n- … and %s more commit(s)' "$SUMMARY" "$((TOTAL - 50))")
+          fi
+
+          # Precondition 3: an already open promotion PR — head is `promote/*`
+          # or HEAD itself (direct-style promotion). Manual mode skips — the
+          # open PR is the promotion. Auto mode keeps it current instead: a
+          # direct HEAD-head PR tracks the branch by itself and only needs its
+          # body refreshed; a stale `promote/*` staging branch is rebuilt in
+          # place (same head branch, same PR number).
+          EXISTING_JSON=$(gh pr list --repo "$REPO" --base "$BASE" --state open \
+            --json url,headRefName,number \
+            | jq -c --arg head "$HEAD" \
+              '[.[] | select((.headRefName | startswith("promote/")) or .headRefName == $head)][0] // empty')
+          EXISTING_NUMBER=""
+          if [[ -n "$EXISTING_JSON" ]]; then
+            EXISTING_URL=$(jq -r '.url' <<<"$EXISTING_JSON")
+            EXISTING_HEAD=$(jq -r '.headRefName' <<<"$EXISTING_JSON")
+            EXISTING_NUMBER=$(jq -r '.number' <<<"$EXISTING_JSON")
+            if [[ "$AUTO" != "true" ]]; then
+              echo "::notice::Promotion PR already open: $EXISTING_URL"
+              echo "Promotion PR already open: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if [[ "$EXISTING_HEAD" == "$HEAD" ]]; then
+              # Direct promotion PR: GitHub already shows the current diff;
+              # refresh the body so the commit summary matches.
+              BODY=$(printf '%s\n\n%s\n\n%s\n' \
+                "Automated promotion of $AHEAD commit(s) from \`$HEAD\` to \`$BASE\`." \
+                "### Commits since \`$BASE\`" \
+                "$SUMMARY")
+              gh pr edit "$EXISTING_NUMBER" --repo "$REPO" --body "$BODY" >/dev/null
+              echo "::notice::Promotion PR refreshed (direct $HEAD → $BASE): $EXISTING_URL"
+              echo "Promotion PR refreshed: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            PROMOTE_BRANCH="$EXISTING_HEAD"
+            git fetch origin "refs/heads/$PROMOTE_BRANCH"
+            P1=$(git rev-parse -q --verify 'FETCH_HEAD^1' 2>/dev/null || true)
+            P2=$(git rev-parse -q --verify 'FETCH_HEAD^2' 2>/dev/null || true)
+            if [[ "$P1" == "$BASE_SHA" && "$P2" == "$HEAD_SHA" ]]; then
+              echo "::notice::Promotion PR already up to date: $EXISTING_URL"
+              echo "Promotion PR already up to date: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "::notice::Refreshing stale promotion PR $EXISTING_URL (staged merge is behind $HEAD/$BASE)."
+          else
+            # No promotion PR yet. In auto mode prefer the direct style when
+            # HEAD merges cleanly into BASE: no branch push (no App `workflows`
+            # permission needed for workflow-file changes) and a head accepted
+            # by every Branch Guard variant. The `promote/*` staging branch is
+            # only for merges that conflict on release-managed files.
+            if [[ "$AUTO" == "true" ]] \
+              && git merge-tree --write-tree "origin/$BASE" "origin/$HEAD" >/dev/null 2>&1; then
+              BODY=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+                "Automated promotion of $AHEAD commit(s) from \`$HEAD\` to \`$BASE\`." \
+                "### Commits since \`$BASE\`" \
+                "$SUMMARY" \
+                "Merge via **Merge commit** (not squash) to preserve conventional commit history.")
+              URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$HEAD" \
+                --title "chore: promote $HEAD → $BASE" \
+                --body "$BODY")
+              echo "Opened: $URL"
+              echo "Opened promotion PR (direct): [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            PROMOTE_BRANCH="promote/${BASE}-$(git rev-parse --short "origin/$HEAD")"
+          fi
 
           # ------------------------------------------------------------------
           # Build the pre-resolved staging merge on top of BASE.
@@ -214,9 +313,23 @@ jobs:
           gh api -X PATCH "repos/$REPO/git/refs/heads/$PROMOTE_BRANCH" \
             -f "sha=$SIGNED" -F "force=true" >/dev/null
 
-          BODY=$(printf 'Automated promotion of %s commit(s) from `%s` to `%s`, staged via `%s`.\n\nRelease-managed files (changelog, version manifests, extra-files) were auto-resolved to `%s`; all other changes merged normally. Merge via the GitHub UI using **Merge commit** (not squash) to preserve conventional commit history and trigger downstream deploy/release workflows.\n' "$AHEAD" "$HEAD" "$BASE" "$PROMOTE_BRANCH" "$BASE")
-          URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$PROMOTE_BRANCH" \
-            --title "chore: promote $HEAD → $BASE" \
-            --body "$BODY")
-          echo "Opened: $URL"
-          echo "Opened promotion PR: [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          NOTE="Release-managed files (changelog, version manifests, extra-files) were auto-resolved"
+          NOTE+=" to \`$BASE\`; all other changes merged normally. Merge via the GitHub UI using"
+          NOTE+=" **Merge commit** (not squash) to preserve conventional commit history and trigger"
+          NOTE+=" downstream deploy/release workflows."
+          BODY=$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "Automated promotion of $AHEAD commit(s) from \`$HEAD\` to \`$BASE\`, staged via \`$PROMOTE_BRANCH\`." \
+            "### Commits since \`$BASE\`" \
+            "$SUMMARY" \
+            "$NOTE")
+          if [[ -n "$EXISTING_NUMBER" ]]; then
+            gh pr edit "$EXISTING_NUMBER" --repo "$REPO" --body "$BODY" >/dev/null
+            echo "Refreshed: $EXISTING_URL"
+            echo "Refreshed promotion PR: [$EXISTING_URL]($EXISTING_URL)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            URL=$(gh pr create --repo "$REPO" --base "$BASE" --head "$PROMOTE_BRANCH" \
+              --title "chore: promote $HEAD → $BASE" \
+              --body "$BODY")
+            echo "Opened: $URL"
+            echo "Opened promotion PR: [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
+          fi

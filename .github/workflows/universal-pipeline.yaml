@@ -145,6 +145,8 @@ on:
 #   deploy:    contents: read, deployments: write, pull-requests: write, packages: write, id-token: write
 #   release:   contents: write, pull-requests: write, id-token: write
 #   sync:      contents: write, pull-requests: write
+#   promotion-pr:         contents: write, pull-requests: write
+#   release-pr-automerge: contents: write, pull-requests: write
 permissions: {}
 
 concurrency:
@@ -218,6 +220,8 @@ jobs:
       # Release configuration
       enable-sync: ${{ steps.parse-config.outputs.enable-sync }}
       sync-target-branch: ${{ steps.parse-config.outputs.sync-target-branch }}
+      auto-promotion-pr: ${{ steps.parse-config.outputs.auto-promotion-pr }}
+      auto-release-merge: ${{ steps.parse-config.outputs.auto-release-merge }}
       release-strategy: ${{ steps.parse-config.outputs.release-strategy }}
       release-type: ${{ steps.parse-config.outputs.release-type }}
       release-force-patch-on-no-release: ${{ steps.parse-config.outputs.release-force-patch-on-no-release }}
@@ -295,6 +299,8 @@ jobs:
             ENABLE_RELEASE="false"
             ENABLE_SYNC="true"
             SYNC_TARGET="dev"
+            AUTO_PROMOTION_PR="true"
+            AUTO_RELEASE_MERGE=""
             PROFILE="major"
             RELEASE_STRATEGY="release-please"
             RELEASE_TYPE=""
@@ -394,6 +400,17 @@ jobs:
             # Extract release sync configuration
             ENABLE_SYNC=$(yq_bool '.release.sync_to_dev' true)
             SYNC_TARGET=$(yq '.release.sync_target_branch // "dev"' "$CONFIG_FILE")
+
+            # One-button release flow. auto_promotion_pr keeps a dev → main
+            # promotion PR open/current whenever dev is ahead (default on; the
+            # job only runs on pushes to dev, so repos without dev never see
+            # it). auto_release_merge arms auto-merge on the stable
+            # release-please PR; empty means "resolve the default at runtime":
+            # true when a dev branch exists or no deploy provider is
+            # configured, false for single-branch deployed apps (their release
+            # PR is the deliberate ship button).
+            AUTO_PROMOTION_PR=$(yq_bool '.release.auto_promotion_pr' true)
+            AUTO_RELEASE_MERGE=$(yq -r '.release.auto_release_merge // ""' "$CONFIG_FILE")
 
             # Extract prerelease branch configuration
             PRERELEASE_BRANCHES=$(yq -o=json -I=0 '.release.prerelease_branches // []' "$CONFIG_FILE" | jq -c '.')
@@ -529,6 +546,8 @@ jobs:
           echo "digitalocean-print-deploy-logs=$DIGITALOCEAN_PRINT_DEPLOY_LOGS" >> $GITHUB_OUTPUT
           echo "enable-sync=$ENABLE_SYNC" >> $GITHUB_OUTPUT
           echo "sync-target-branch=$SYNC_TARGET" >> $GITHUB_OUTPUT
+          echo "auto-promotion-pr=$AUTO_PROMOTION_PR" >> $GITHUB_OUTPUT
+          echo "auto-release-merge=$AUTO_RELEASE_MERGE" >> $GITHUB_OUTPUT
           echo "release-strategy=$RELEASE_STRATEGY" >> $GITHUB_OUTPUT
           echo "release-type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
           echo "release-force-patch-on-no-release=$RELEASE_FORCE_PATCH_NO_RELEASE" >> $GITHUB_OUTPUT
@@ -1435,6 +1454,7 @@ jobs:
       release-created: ${{ steps.release-mgmt.outputs.release-created }}
       release-version: ${{ steps.release-mgmt.outputs.release-version }}
       release-tag: ${{ steps.release-mgmt.outputs.release-tag }}
+      release-pr-number: ${{ steps.release-mgmt.outputs.pr-number }}
     if: |
       always() &&
       needs.setup.outputs.enable-release == 'true' &&
@@ -1593,6 +1613,190 @@ jobs:
           prerelease-manifest-file: ${{ needs.setup.outputs.release-manifest-file }}
           stable-manifest-file: ${{ needs.setup.outputs.release-manifest-file-stable }}
           stable-version: ${{ needs.release.outputs.release-version }}
+
+  # =============================================================================
+  # PROMOTION PR (dev → main) — one-button release, step 1
+  # =============================================================================
+  # Keeps a dev → main promotion PR open and current whenever dev is ahead of
+  # main, reusing the promote-to-main machinery (pre-resolved `promote/*`
+  # staging branch + GitHub-signed merge commit) so both Branch Guard styles —
+  # head `dev` accepted directly, or bot-authored `promote/*` required — pass.
+  # In auto mode the reusable soft-skips while a release-please PR is open on
+  # dev and refreshes an existing stale promotion PR in place. The promotion
+  # PR itself is NEVER auto-merged: merging it is the one human action in the
+  # release flow (Flama Auto Merge independently excludes PRs targeting the
+  # release branch on the major profile, and release-please heads everywhere).
+  # Ordered after `release` so the beta release-PR state is settled first.
+  promotion-pr:
+    name: 📤 Promotion PR
+    needs: [setup, release]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev' &&
+      needs.setup.result == 'success' &&
+      needs.setup.outputs.auto-promotion-pr == 'true' &&
+      (needs.release.result == 'success' || needs.release.result == 'skipped')
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: maxbec/pipeline/.github/workflows/promote-to-main.yaml@v3
+    with:
+      auto: true
+    secrets:
+      WORKFLOW_APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
+      WORKFLOW_APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+
+  # =============================================================================
+  # STABLE RELEASE PR AUTO-MERGE — one-button release, step 2
+  # =============================================================================
+  # After a push to main leaves an open stable release-please PR (typically the
+  # push that merged the promotion PR), arm GitHub auto-merge on it so the
+  # release lands without a second human merge. Every required check is still
+  # enforced by GitHub at merge time — this only removes the button-press.
+  # Only `release-please*` heads are ever considered: promotion PRs (head
+  # `dev` or `promote/*`) must never be auto-merged.
+  release-pr-automerge:
+    name: 🤖 Release PR Auto-merge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    needs: [setup, release]
+    if: |
+      always() &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.setup.outputs.enable-release == 'true' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.release-created != 'true'
+    steps:
+      - name: 🔎 Check app credentials
+        id: app-creds
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$APP_ID" && -n "$PRIVATE_KEY" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 🔑 Mint GitHub App token
+        id: app-token
+        if: steps.app-creds.outputs.available == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.WORKFLOW_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+
+      - name: 🤖 Arm auto-merge on the stable release PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CONFIGURED: ${{ needs.setup.outputs.auto-release-merge }}
+          PROFILE: ${{ needs.setup.outputs.profile }}
+          DEPLOY_PROVIDER: ${{ needs.setup.outputs.deploy-provider }}
+          PR_NUMBER_HINT: ${{ needs.release.outputs.release-pr-number }}
+          APP_AVAILABLE: ${{ steps.app-creds.outputs.available }}
+        run: |
+          set -euo pipefail
+
+          # Resolve the effective setting. Explicit config always wins; the
+          # default is true when a dev branch exists (two-branch repos: the
+          # promotion PR is the only human merge) or when no deploy provider
+          # is configured (libraries/tooling: releases are safe to cut
+          # hands-free), and false for single-branch deployed apps, whose
+          # release PR is the deliberate ship button.
+          DECISION="$CONFIGURED"
+          if [[ -z "$DECISION" || "$DECISION" == "null" ]]; then
+            if gh api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
+              DECISION="true"
+            elif [[ "$DEPLOY_PROVIDER" == "none" ]]; then
+              DECISION="true"
+            else
+              DECISION="false"
+            fi
+          fi
+          if [[ "$DECISION" != "true" ]]; then
+            echo "::notice::auto_release_merge resolved to '$DECISION' — release PR left for a human merge."
+            exit 0
+          fi
+
+          # Locate the stable release-please PR. Only release-please heads
+          # are ever considered here.
+          PR_NUMBER="$PR_NUMBER_HINT"
+          if [[ -z "$PR_NUMBER" ]]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --base main --state open \
+              --json number,headRefName,author \
+              --jq '[.[] | select(.headRefName | startswith("release-please"))
+                     | select(.author.is_bot == true
+                              or (.author.login | test("github-actions")))][0].number // empty')
+          fi
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "::notice::No open stable release PR on main — nothing to arm."
+            exit 0
+          fi
+
+          PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json headRefName,baseRefName,isDraft,state)
+          HEAD_REF=$(jq -r '.headRefName' <<<"$PR_JSON")
+          BASE_REF=$(jq -r '.baseRefName' <<<"$PR_JSON")
+          IS_DRAFT=$(jq -r '.isDraft' <<<"$PR_JSON")
+          STATE=$(jq -r '.state' <<<"$PR_JSON")
+          if [[ "$STATE" != "OPEN" || "$BASE_REF" != "main" ]]; then
+            echo "::notice::PR #$PR_NUMBER is not an open PR on main — skipping."
+            exit 0
+          fi
+          if [[ "$HEAD_REF" != release-please* ]]; then
+            echo "::error::PR #$PR_NUMBER head '$HEAD_REF' is not a release-please branch — refusing to arm."
+            exit 1
+          fi
+
+          if [[ "$APP_AVAILABLE" != "true" ]]; then
+            echo "::warning::No WORKFLOW_APP credentials — the eventual merge is performed by" \
+              "github-actions[bot], whose push to main does NOT trigger the release workflow." \
+              "Configure the App secrets for a fully hands-free release."
+          fi
+
+          # Draft release PRs (the default) skip full CI while parked; marking
+          # ready re-triggers the complete PR pipeline, and auto-merge below
+          # waits for every required check before merging.
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            gh pr ready "$PR_NUMBER" --repo "$REPO"
+          fi
+
+          # main merges with a merge commit on the two-branch (major) profile;
+          # the single-branch (fast) profile squashes to main.
+          METHOD="--merge"
+          MERGE_METHOD="merge"
+          if [[ "$PROFILE" == "fast" ]]; then
+            METHOD="--squash"
+            MERGE_METHOD="squash"
+          fi
+
+          if gh pr merge "$PR_NUMBER" --repo "$REPO" "$METHOD" --auto 2>"$RUNNER_TEMP/arm.err"; then
+            echo "✅ Auto-merge armed on release PR #$PR_NUMBER ($MERGE_METHOD)."
+            exit 0
+          fi
+          if grep -qiE 'already enabled|auto merge is already' "$RUNNER_TEMP/arm.err"; then
+            echo "✅ Auto-merge already armed on release PR #$PR_NUMBER."
+            exit 0
+          fi
+          # A PR whose checks are already green cannot be armed ("clean
+          # status"); merge it directly through the REST endpoint, which still
+          # enforces every branch protection at merge time.
+          if grep -qiE 'clean status|not in the correct state' "$RUNNER_TEMP/arm.err"; then
+            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/merge" -f merge_method="$MERGE_METHOD"
+            echo "✅ Release PR #$PR_NUMBER merged directly (was already green)."
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/arm.err" >&2
+          exit 1
 
   # =============================================================================
   # PIPELINE GATE — hard invariant: a required check never passes on skipped tests

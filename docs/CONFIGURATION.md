@@ -659,6 +659,35 @@ Automated release management configuration.
 
 Enable automated release management with release-please.
 
+#### `release.auto_promotion_pr`
+
+**Type:** `boolean` **Default:** `true`
+
+One-button release flow, step 1. On every push to `dev`, create — or refresh
+in place — a `dev` → `main` promotion PR whenever `dev` is ahead of `main`
+(staged via the bot-authored `promote/*` branch machinery, so strict Branch
+Guards pass). The promotion PR is deferred with a notice while a release-please
+PR is open on `dev`, and it is **never auto-merged**: merging it is the one
+human action in the release flow. The job only runs on pushes to `dev`, so
+repos without a `dev` branch are unaffected.
+
+#### `release.auto_release_merge`
+
+**Type:** `boolean` **Default:** _resolved at runtime_ (see below)
+
+One-button release flow, step 2. After a push to `main` leaves an open stable
+release-please PR (typically the push that merged the promotion PR), arm
+GitHub auto-merge on it (merge commit on the `major` profile, squash on
+`fast`), marking a draft release PR ready first so its full pipeline runs.
+Every required check is still enforced by GitHub at merge time. Promotion PRs
+(head `dev` or `promote/*`) are never armed — only `release-please*` heads.
+
+Default when the key is absent: `true` when a `dev` branch exists (two-branch
+repos — the promotion PR is the only human merge) or when
+`deployment.provider` is `none` (libraries/tooling); `false` for single-branch
+deployed apps, whose release PR is the deliberate ship button. An explicit
+value always wins.
+
 #### `release.type`
 
 **Type:** `string` **Options:** `node`, `python`, `simple` **Default:** `simple`
