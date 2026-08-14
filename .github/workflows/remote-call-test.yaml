@@ -1,0 +1,8 @@
+name: Remote Call Test
+on: pull_request
+permissions:
+  contents: read
+jobs:
+  call:
+    uses: maxbec/pipeline/.github/workflows/universal-pipeline.yaml@2c0ad24c9d87e44badc5ea00db62b34a77171990
+    secrets: inherit
