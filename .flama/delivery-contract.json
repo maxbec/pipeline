@@ -1,20 +1,20 @@
 {
   "schemaVersion": 1,
   "repository": {
-    "owner": "navigaite",
-    "name": ".github",
+    "owner": "maxbec",
+    "name": "pipeline",
     "visibility": "public"
   },
   "paperclip": {
-    "company": "// Navigaite",
-    "projectId": "37a1c817-ec99-44ed-94d7-48de2d777749",
-    "workspaceId": "c0027cc1-df00-4ba6-a01e-371116f4cff7"
+    "company": "Private",
+    "projectId": "d3f336d9-7eec-4ebf-8a58-ed2c2c201406",
+    "workspaceId": "39a7037d-e74a-457f-af45-bf3a016b3722"
   },
-  "profile": "major",
+  "profile": "fast",
   "branches": {
-    "default": "dev",
+    "default": "main",
     "stable": "main",
-    "featureTarget": "dev"
+    "featureTarget": "main"
   },
   "commands": {
     "buildable": "./scripts/delivery buildable",
@@ -49,7 +49,7 @@
       "development": "/development"
     },
     "exceptionsFile": ".flama/secret-exceptions.json",
-    "projectSlug": "dot-github-9xlr"
+    "projectSlug": "pipeline"
   },
   "platform": {
     "repository": "maxbec/flama-delivery-platform",
