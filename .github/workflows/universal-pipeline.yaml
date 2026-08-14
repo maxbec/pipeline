@@ -125,6 +125,14 @@ on:
         required: false
       INFISICAL_SECRET_PATH:
         required: false
+      # Cloudflare Access service-token headers for self-hosted Infisical
+      # instances gated by CF Access (e.g. infisical.navigaite.de). Sent as
+      # extra headers on the Infisical action's login and secret-read
+      # requests; harmless when empty or when the domain has no Access gate.
+      CF_ACCESS_CLIENT_ID:
+        required: false
+      CF_ACCESS_CLIENT_SECRET:
+        required: false
 
 # NOTE: Calling workflows must grant the permissions each job actually uses:
 #   setup:     contents: read, pull-requests: read (PR Files API for docs-only detection)
@@ -224,7 +232,7 @@ jobs:
 
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # fetch-depth 2 lets the docs-only detector compare HEAD against
           # its parent on push events. PR events use the Files API and
@@ -743,7 +751,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Required for TruffleHog (security scan)
 
@@ -802,7 +810,7 @@ jobs:
       - name: 🩺 Run React Doctor (PR)
         id: react-doctor-pr
         if: needs.setup.outputs.enable-lint == 'true' && steps.detect-react.outputs.enabled == 'true' && github.event_name == 'pull_request'
-        uses: millionco/react-doctor@61bf03eedcc602b2e21c45e1a5f2e3f012c7201c # main
+        uses: millionco/react-doctor@b31fd85b9ee469c6b588d4e446f44385466193a2 # main
         continue-on-error: true
         with:
           directory: ${{ inputs.working-directory }}
@@ -813,7 +821,7 @@ jobs:
       - name: 🩺 Run React Doctor
         id: react-doctor
         if: needs.setup.outputs.enable-lint == 'true' && steps.detect-react.outputs.enabled == 'true' && github.event_name != 'pull_request'
-        uses: millionco/react-doctor@61bf03eedcc602b2e21c45e1a5f2e3f012c7201c # main
+        uses: millionco/react-doctor@b31fd85b9ee469c6b588d4e446f44385466193a2 # main
         continue-on-error: true
         with:
           directory: ${{ inputs.working-directory }}
@@ -999,7 +1007,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔧 Setup Environment
         uses: navigaite/.github/.github/actions/setup-environment@v3
@@ -1105,6 +1113,9 @@ jobs:
           env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🔐 Load Infisical Secrets (Universal Auth)
         if: needs.setup.outputs.enable-build == 'true' && steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
@@ -1117,6 +1128,9 @@ jobs:
           env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🏗️ Run Build
         if: needs.setup.outputs.enable-build == 'true'
@@ -1162,7 +1176,7 @@ jobs:
       name: ${{ matrix.environment }}
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔧 Setup Node Runtime
         if: needs.setup.outputs.stack == 'nodejs'
@@ -1221,6 +1235,9 @@ jobs:
           env-slug: ${{ steps.infisical-config.outputs.env-slug }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🔐 Load Infisical Secrets (Universal Auth)
         if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
@@ -1233,6 +1250,9 @@ jobs:
           env-slug: ${{ steps.infisical-config.outputs.env-slug }}
           domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
           secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: 🚀 Deploy to Vercel
         uses: navigaite/.github/.github/actions/deploy-vercel@v3
@@ -1273,7 +1293,7 @@ jobs:
       name: ${{ matrix.environment }}
     steps:
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🚀 Deploy to DigitalOcean
         uses: navigaite/.github/.github/actions/deploy-digitalocean@v3
@@ -1322,7 +1342,7 @@ jobs:
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔍 Resolve Image Metadata
         id: resolve
@@ -1449,7 +1469,7 @@ jobs:
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: 🔍 Resolve prerelease config
         id: prerelease
@@ -1553,7 +1573,7 @@ jobs:
           private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
 
       - name: 📥 Checkout code
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}

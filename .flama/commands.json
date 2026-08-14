@@ -1,0 +1,22 @@
+{
+  "buildable": [
+    "python3",
+    "scripts/repo-check.py"
+  ],
+  "affected": [
+    "python3",
+    "scripts/repo-check.py"
+  ],
+  "full": [
+    "python3",
+    "scripts/repo-check.py"
+  ],
+  "smoke": [
+    "python3",
+    "scripts/repo-check.py"
+  ],
+  "health": [
+    "python3",
+    "scripts/repo-check.py"
+  ]
+}

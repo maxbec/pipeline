@@ -657,3 +657,13 @@ The `ready_for_review` trigger type is required — without it, un-drafting a PR
 - `docs/VERSIONING_GUIDE.md` — release-please setup.
 - `docs/ORG_MAINTENANCE.md` — org ruleset + bootstrap tooling.
 - `.github/config/examples/` — working config samples.
+
+<!-- flama-delivery:start -->
+## Flama delivery
+
+This repository uses the major delivery profile. Target dev for feature work and main for promotion.
+Run deterministic checks only through `./scripts/delivery`.
+Never expose secret values; use the approved Infisical identity and paths.
+Production requires Max's approval of the exact deployment PR head SHA.
+Do not edit centrally generated `.flama` or Flama workflow files by hand.
+<!-- flama-delivery:end -->

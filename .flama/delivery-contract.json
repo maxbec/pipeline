@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "repository": {
+    "owner": "navigaite",
+    "name": ".github",
+    "visibility": "public"
+  },
+  "paperclip": {
+    "company": "// Navigaite",
+    "projectId": "37a1c817-ec99-44ed-94d7-48de2d777749",
+    "workspaceId": "c0027cc1-df00-4ba6-a01e-371116f4cff7"
+  },
+  "profile": "major",
+  "branches": {
+    "default": "dev",
+    "stable": "main",
+    "featureTarget": "dev"
+  },
+  "commands": {
+    "buildable": "./scripts/delivery buildable",
+    "affected": "./scripts/delivery affected",
+    "full": "./scripts/delivery full",
+    "smoke": "./scripts/delivery smoke",
+    "health": "./scripts/delivery health"
+  },
+  "changeDetection": {
+    "failClosed": true,
+    "broadenOn": [
+      "lockfiles",
+      "authentication",
+      "database_schema",
+      "uncertain_detection"
+    ]
+  },
+  "release": {
+    "enabled": false,
+    "strategy": "release-please",
+    "impactSource": "paperclip_task",
+    "type": "simple"
+  },
+  "deployment": {
+    "deployable": false,
+    "provider": "none",
+    "manifestPath": ".deploy/production.yaml"
+  },
+  "secrets": {
+    "source": "infisical",
+    "paths": {
+      "development": "/development"
+    },
+    "exceptionsFile": ".flama/secret-exceptions.json",
+    "projectSlug": "dot-github-9xlr"
+  },
+  "platform": {
+    "repository": "maxbec/flama-delivery-platform",
+    "version": "0.5.3"
+  }
+}

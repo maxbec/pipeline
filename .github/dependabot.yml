@@ -1,51 +1,35 @@
 ---
 version: 2
 updates:
-  # GitHub Actions dependencies
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
-      time: '06:00'
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - github-actions
-    commit-message:
-      prefix: 'chore(deps):'
-      include: scope
-    reviewers:
-      - navigaite/engineering
-
-  # Node.js dependencies
+      time: "04:00"
+      timezone: Europe/Berlin
+    target-branch: dev
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 7
+    groups:
+      routine-updates:
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
       day: monday
-      time: '06:00'
-    open-pull-requests-limit: 10
-    labels:
-      - dependencies
-      - javascript
-    commit-message:
-      prefix: 'chore(deps):'
-      include: scope
+      time: "04:00"
+      timezone: Europe/Berlin
+    target-branch: dev
+    open-pull-requests-limit: 1
+    cooldown:
+      default-days: 7
     groups:
-      # Group minor and patch updates
-      production-dependencies:
-        dependency-type: production
+      routine-updates:
         update-types:
           - minor
           - patch
-      development-dependencies:
-        dependency-type: development
-        update-types:
-          - minor
-          - patch
-    ignore:
-      # Ignore major version updates for stability
-      - dependency-name: '*'
-        update-types:
-          - version-update:semver-major

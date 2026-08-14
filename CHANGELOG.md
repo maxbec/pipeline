@@ -1,41 +1,69 @@
 # Changelog
 
-## [3.3.2](https://github.com/navigaite/.github/compare/v3.3.1...v3.3.2) (2026-07-26)
+## [3.4.0](https://github.com/maxbec/pipeline) (2026-08-14)
+
+Stable promotion of the 3.3.0-beta line. Highlights:
+
+* **pipeline:** pass Cloudflare Access service-token headers to Infisical (#290)
+* **ci:** adopt Flama delivery platform 0.5.3 gates (#282, #284, #287, #289)
+* rehomed from navigaite/.github to maxbec/pipeline
+
+## [3.3.0-beta.18](https://github.com/navigaite/.github/compare/v3.3.0-beta.17...v3.3.0-beta.18) (2026-08-13)
+
+
+### ✨ Features
+
+* **pipeline:** pass Cloudflare Access service-token headers to Infisical ([#290](https://github.com/navigaite/.github/issues/290)) ([91d5a6c](https://github.com/navigaite/.github/commit/91d5a6c4f167218193edf7f59e2933959e41ef67))
+
+## [3.3.0-beta.17](https://github.com/navigaite/.github/compare/v3.3.0-beta.16...v3.3.0-beta.17) (2026-07-26)
 
 
 ### 🐛 Bug Fixes
 
 * **pipeline:** point TMPDIR at RUNNER_TEMP on self-hosted jobs (NAV-54) ([#274](https://github.com/navigaite/.github/issues/274)) ([42192e7](https://github.com/navigaite/.github/commit/42192e73ef28dfe92a103f9e45dcb20a0a2fe323))
 
-## [3.3.1](https://github.com/navigaite/.github/compare/v3.3.0...v3.3.1) (2026-07-26)
+## [3.3.0-beta.16](https://github.com/navigaite/.github/compare/v3.3.0-beta.15...v3.3.0-beta.16) (2026-07-26)
 
 
 ### 🐛 Bug Fixes
 
 * **ci:** reconcile rolling tags decoupled from release-please outcome (NAV-53) ([#270](https://github.com/navigaite/.github/issues/270)) ([d42ff42](https://github.com/navigaite/.github/commit/d42ff42b188076224f8efe867ce1b40be280b8fb))
 
-## [3.3.0](https://github.com/navigaite/.github/compare/v3.2.3...v3.3.0) (2026-07-26)
-
-
-### ✨ Features
-
-* **pipeline:** add fast|major repo profile knob (NAV-21) ([#254](https://github.com/navigaite/.github/issues/254)) ([88322aa](https://github.com/navigaite/.github/commit/88322aaa8ec6721b2592711e4125e124f07e7fbe))
+## [3.3.0-beta.15](https://github.com/navigaite/.github/compare/v3.3.0-beta.14...v3.3.0-beta.15) (2026-07-26)
 
 
 ### 🐛 Bug Fixes
 
 * **ci:** allow bot-authored promote/* heads in Branch Guard (NAV-21) ([#265](https://github.com/navigaite/.github/issues/265)) ([d3fc194](https://github.com/navigaite/.github/commit/d3fc194e1cdb589a1d8d7c50c59996678497d868))
-* **pipeline:** plumb NPM_TOKEN into semantic-release publish (NAV-41) ([#256](https://github.com/navigaite/.github/issues/256)) ([736289c](https://github.com/navigaite/.github/commit/736289ce4e2bd59fc9af91821857461194364bbc))
-* **promote:** durable conflict-free dev→main promotion (NAV-46) ([#259](https://github.com/navigaite/.github/issues/259)) ([7c9db56](https://github.com/navigaite/.github/commit/7c9db56a62a4e4abbe5ba7afd924a709fc1442a7))
-* **security-scan:** run TruffleHog Docker-less for self-hosted runners ([#258](https://github.com/navigaite/.github/issues/258)) ([515e08a](https://github.com/navigaite/.github/commit/515e08a16af5e40c7f89d22a7ff37fc508e147e5))
-* **sync:** retire impossible main→dev back-merge; reconcile via auto-merged PR (NAV-50) ([#261](https://github.com/navigaite/.github/issues/261)) ([bc566cc](https://github.com/navigaite/.github/commit/bc566ccbdcacff2bf3732474615a4ac362fe9aee))
 
-## [3.2.3](https://github.com/navigaite/.github/compare/v3.2.2...v3.2.3) (2026-07-25)
+## [3.3.0-beta.14](https://github.com/navigaite/.github/compare/v3.3.0-beta.13...v3.3.0-beta.14) (2026-07-26)
 
 
 ### 🐛 Bug Fixes
 
-* **ci:** drop checks:write over-request that startup-fails every consumer on [@v3](https://github.com/v3) ([#248](https://github.com/navigaite/.github/issues/248)) ([8819bd1](https://github.com/navigaite/.github/commit/8819bd18bad6209fda7ad671abd33b091db31486))
+* **sync:** retire impossible main→dev back-merge; reconcile via auto-merged PR (NAV-50) ([#261](https://github.com/navigaite/.github/issues/261)) ([bc566cc](https://github.com/navigaite/.github/commit/bc566ccbdcacff2bf3732474615a4ac362fe9aee))
+
+## [3.3.0-beta.13](https://github.com/navigaite/.github/compare/v3.3.0-beta.12...v3.3.0-beta.13) (2026-07-26)
+
+
+### 🐛 Bug Fixes
+
+* **promote:** durable conflict-free dev→main promotion (NAV-46) ([#259](https://github.com/navigaite/.github/issues/259)) ([7c9db56](https://github.com/navigaite/.github/commit/7c9db56a62a4e4abbe5ba7afd924a709fc1442a7))
+* **security-scan:** run TruffleHog Docker-less for self-hosted runners ([#258](https://github.com/navigaite/.github/issues/258)) ([515e08a](https://github.com/navigaite/.github/commit/515e08a16af5e40c7f89d22a7ff37fc508e147e5))
+
+## [3.3.0-beta.12](https://github.com/navigaite/.github/compare/v3.3.0-beta.11...v3.3.0-beta.12) (2026-07-26)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** plumb NPM_TOKEN into semantic-release publish (NAV-41) ([#256](https://github.com/navigaite/.github/issues/256)) ([736289c](https://github.com/navigaite/.github/commit/736289ce4e2bd59fc9af91821857461194364bbc))
+
+## [3.3.0-beta.11](https://github.com/navigaite/.github/compare/v3.2.1-beta.11...v3.3.0-beta.11) (2026-07-26)
+
+
+### ✨ Features
+
+* **pipeline:** add fast|major repo profile knob (NAV-21) ([#254](https://github.com/navigaite/.github/issues/254)) ([88322aa](https://github.com/navigaite/.github/commit/88322aaa8ec6721b2592711e4125e124f07e7fbe))
 
 ## [3.2.2](https://github.com/navigaite/.github/compare/v3.2.1...v3.2.2) (2026-07-24)
 
