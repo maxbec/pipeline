@@ -139,6 +139,16 @@ runs:
         echo "::endgroup::"
       env:
         ENVIRONMENT: ${{ inputs.environment }}
+        # Canonical environment name (development / preview / production), for
+        # the application build to key off. `vercel build` runs the framework
+        # build as a child process, so this is visible to it.
+        #
+        # Vercel's own VERCEL_ENV cannot be used for this: everything that is
+        # not a production deployment reports `preview`, regardless of which
+        # environment the pipeline is deploying. APP_ENV also keeps application
+        # code portable to the non-Vercel deploy providers.
+        # See ~/docs/operations/ENVIRONMENT_CONVENTION.md
+        APP_ENV: ${{ inputs.environment }}
         BUILD_CMD: ${{ inputs.build-command }}
         VERCEL_TOKEN: ${{ inputs.vercel-token }}
         VERCEL_ORG_ID: ${{ inputs.vercel-org-id }}
