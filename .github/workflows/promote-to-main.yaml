@@ -264,6 +264,17 @@ jobs:
             # files it is safe to resolve to BASE (main re-derives the stable
             # entry after the promotion lands).
             ALLOW=$'CHANGELOG.md\npackage.json\npackage-lock.json\npnpm-lock.yaml\nyarn.lock'
+            # The release manifests are the most likely files to conflict of all
+            # — each release track writes its own version into them — so they
+            # must be resolvable too. Take the paths the repo actually declares,
+            # falling back to release-please's defaults.
+            MANIFESTS=$(yq -r '
+              [.release.manifest_file, .release.manifest_file_stable]
+              | map(select(. != null and . != "")) | .[]
+            ' .github/pipeline.yaml 2>/dev/null || true)
+            ALLOW=$(printf '%s\n%s\n%s\n' "$ALLOW" \
+              $'.release-please-manifest.json\n.release-please-manifest.dev.json' \
+              "$MANIFESTS")
             EXTRA=$(jq -r '
               .packages // {} | to_entries[] | .value["extra-files"] // []
               | .[] | if type == "object" then .path else . end
