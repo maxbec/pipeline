@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.1](https://github.com/maxbec/pipeline/compare/v4.0.0-beta...v4.0.0-beta.1) (2026-08-15)
+
+
+### ✨ Features
+
+* **deploy-vercel:** inject APP_ENV into the build ([#17](https://github.com/maxbec/pipeline/issues/17)) ([d2a3ed9](https://github.com/maxbec/pipeline/commit/d2a3ed992ec95c54b4e46121ba8b6c5bfa955915))
+
 ## [4.0.0-beta](https://github.com/maxbec/pipeline/compare/v3.4.1...v4.0.0-beta) (2026-08-14)
 
 
