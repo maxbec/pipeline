@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.2](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.1...v4.0.0-beta.2) (2026-08-15)
+
+
+### 🐛 Bug Fixes
+
+* **promote:** resolve conflicts in the release manifests too ([#20](https://github.com/maxbec/pipeline/issues/20)) ([e1d1460](https://github.com/maxbec/pipeline/commit/e1d1460b883a34e3c2e30767519103648b8bd762))
+
 ## [4.0.0-beta.1](https://github.com/maxbec/pipeline/compare/v4.0.0-beta...v4.0.0-beta.1) (2026-08-15)
 
 
