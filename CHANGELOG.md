@@ -1,5 +1,17 @@
 # Changelog
 
+## [3.6.0](https://github.com/maxbec/pipeline/compare/v3.5.0...v3.6.0) (2026-08-15)
+
+
+### ✨ Features
+
+* **deploy-vercel:** inject APP_ENV into the build ([#17](https://github.com/maxbec/pipeline/issues/17)) ([d2a3ed9](https://github.com/maxbec/pipeline/commit/d2a3ed992ec95c54b4e46121ba8b6c5bfa955915))
+
+
+### 🐛 Bug Fixes
+
+* **promote:** resolve conflicts in the release manifests too ([#20](https://github.com/maxbec/pipeline/issues/20)) ([e1d1460](https://github.com/maxbec/pipeline/commit/e1d1460b883a34e3c2e30767519103648b8bd762))
+
 ## [3.5.0](https://github.com/maxbec/pipeline/compare/v3.4.1...v3.5.0) (2026-08-14)
 
 
