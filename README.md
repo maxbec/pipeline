@@ -16,7 +16,7 @@
 
 The Universal Pipeline is a **reusable GitHub Actions workflow** that auto-detects your tech stack, runs security scans, lints, tests, builds, deploys, and releases — all from a single YAML config file.
 
-**Current version: `v3.5.0`** — consumers pin to `@v2` and always get the latest patch. <!-- x-release-please-version -->
+**Current version: `v3.6.0`** — consumers pin to `@v2` and always get the latest patch. <!-- x-release-please-version -->
 
 ### Highlights
 
