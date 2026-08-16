@@ -673,7 +673,7 @@ repos without a `dev` branch are unaffected.
 
 #### `release.auto_release_merge`
 
-**Type:** `boolean` **Default:** _resolved at runtime_ (see below)
+**Type:** `boolean` **Default:** `false`
 
 One-button release flow, step 2. After a push to `main` leaves an open stable
 release-please PR (typically the push that merged the promotion PR), arm
@@ -682,11 +682,16 @@ GitHub auto-merge on it (merge commit on the `major` profile, squash on
 Every required check is still enforced by GitHub at merge time. Promotion PRs
 (head `dev` or `promote/*`) are never armed — only `release-please*` heads.
 
-Default when the key is absent: `true` when a `dev` branch exists (two-branch
-repos — the promotion PR is the only human merge) or when
-`deployment.provider` is `none` (libraries/tooling); `false` for single-branch
-deployed apps, whose release PR is the deliberate ship button. An explicit
-value always wins.
+**Defaults to `false` everywhere: nothing merges into `main` without a human.**
+Both merges into `main` — the promotion PR and the stable release PR — are
+deliberate decisions.
+
+This default was previously resolved at runtime and came out `true` whenever a
+`dev` branch existed, on the theory that the promotion PR was the only human
+merge. In practice the stable release PR then merged itself into `main` a
+couple of minutes after every promotion landed. A repo that genuinely wants
+hands-free releases — a library with no deploy provider, say — opts in with an
+explicit `true`.
 
 #### `release.type`
 
