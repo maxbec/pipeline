@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.6](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.5...v4.0.0-beta.6) (2026-08-16)
+
+
+### 🐛 Bug Fixes
+
+* **release:** align the stable manifest with main at 4.0.1 ([#37](https://github.com/maxbec/pipeline/issues/37)) ([5563a65](https://github.com/maxbec/pipeline/commit/5563a6571315e35ce1048f77e1fddd27c8e550a0))
+
 ## [4.0.0-beta.5](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.4...v4.0.0-beta.5) (2026-08-16)
 
 
