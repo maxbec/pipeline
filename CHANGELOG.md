@@ -6,6 +6,7 @@
 ### 🐛 Bug Fixes
 
 * **deploy-vercel:** green deployments when the deploy succeeds ([#27](https://github.com/maxbec/pipeline/issues/27)) ([bfe487f](https://github.com/maxbec/pipeline/commit/bfe487f54eab508b75a27eb220b883bc44c5e83e))
+* **release:** re-fire the release PR's suppressed checks ([#33](https://github.com/maxbec/pipeline/issues/33)) ([2009d7b](https://github.com/maxbec/pipeline/commit/2009d7b73af67949cd79832fcea0b1e6efdf672f))
 * **release:** stop this repo auto-merging its own release PR into main ([#30](https://github.com/maxbec/pipeline/issues/30)) ([5739ea4](https://github.com/maxbec/pipeline/commit/5739ea463750473b5529adde87538258c4584ae4))
 * **sync-branches:** sign the reconcile commit ([#31](https://github.com/maxbec/pipeline/issues/31)) ([436dc1c](https://github.com/maxbec/pipeline/commit/436dc1c180d5a46509159481f7123ee6e55a4908))
 
