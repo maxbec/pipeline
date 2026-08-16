@@ -132,15 +132,45 @@ runs:
         fi
 
         # Deliver via an auto-merged squash PR. A direct push to a protected
-        # `dev` is impossible (PR + signatures + checks required); the squash
-        # merge GitHub creates on `dev` is GitHub-signed and passes checks.
+        # `dev` is impossible (PR + signatures + checks required).
+        #
+        # The commit MUST be created through the API, not with `git commit` on
+        # the runner. `required_signatures` blocks merging a PR that *contains*
+        # an unsigned commit, whatever the merge method — so a runner-signed
+        # (i.e. unsigned) commit here produces a reconcile PR that can never
+        # merge, and the dev prerelease cursor silently stops advancing.
+        # `createCommitOnBranch` commits are web-flow signed and always verify.
         BRANCH="chore/reconcile-dev-manifest"
-        git checkout -B "$BRANCH"
-        git add -- "$PRERELEASE_MANIFEST_FILE"
-        git commit \
-          -m "chore: reconcile dev prerelease manifest base after stable release" \
-          -m "Reset the dev prerelease cursor(s) in '$PRERELEASE_MANIFEST_FILE' to the just-released stable version so the next dev beta computes ABOVE stable. Delivered as an auto-merged squash PR because a direct push to a protected dev branch is rejected (PR + signed commits + status checks required). See NAV-50."
-        git push origin "HEAD:$BRANCH" --force
+        MANIFEST_B64=$(base64 -w0 < "$PRERELEASE_MANIFEST_FILE")
+
+        # Commit on top of the branch when it already exists (an open reconcile
+        # PR keeps its number and its commits), otherwise branch off the target.
+        # Never reset an existing branch back to base: a PR left with zero
+        # commits is closed automatically by GitHub.
+        HEAD_OID=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" \
+          --jq .object.sha 2>/dev/null || true)
+        if [[ -z "$HEAD_OID" ]]; then
+          HEAD_OID=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$TARGET_BRANCH" --jq .object.sha)
+          gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref="refs/heads/$BRANCH" -f sha="$HEAD_OID" >/dev/null
+        fi
+
+        COMMIT_BODY="Reset the dev prerelease cursor(s) in '$PRERELEASE_MANIFEST_FILE' to the just-released stable version so the next dev beta computes ABOVE stable. Delivered as an auto-merged squash PR because a direct push to a protected dev branch is rejected (PR + signed commits + status checks required). See NAV-50."
+        jq -n \
+          --arg repo "$GITHUB_REPOSITORY" \
+          --arg branch "$BRANCH" \
+          --arg headline "chore: reconcile dev prerelease manifest base after stable release" \
+          --arg body "$COMMIT_BODY" \
+          --arg oid "$HEAD_OID" \
+          --arg path "$PRERELEASE_MANIFEST_FILE" \
+          --arg contents "$MANIFEST_B64" \
+          '{query:"mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}",
+            variables:{input:{
+              branch:{repositoryNameWithOwner:$repo,branchName:$branch},
+              message:{headline:$headline,body:$body},
+              expectedHeadOid:$oid,
+              fileChanges:{additions:[{path:$path,contents:$contents}]}}}}' \
+          | gh api graphql --input - --jq '.data.createCommitOnBranch.commit.oid'
 
         PR_NUMBER=$(gh pr list --head "$BRANCH" --base "$TARGET_BRANCH" \
           --state open --json number --jq '.[0].number // empty')

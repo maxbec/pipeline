@@ -183,7 +183,13 @@ runs:
         *) VERCEL_TARGET="preview" ;;
         esac
 
-        # Deploy prebuilt project (non-interactive with hard timeout to prevent hanging jobs)
+        # Deploy prebuilt project (non-interactive with hard timeout to prevent hanging jobs).
+        # The exit code decides success or failure — never the URL parsing. The CLI
+        # exiting 0 means the deployment was accepted; if its output shape then
+        # changes and the URL cannot be scraped, that is a reporting problem, not a
+        # failed deploy. Failing the job on it reports a red deployment for a live
+        # release (observed 2026-08-16: deployment READY on Vercel, job red).
+        set +e
         DEPLOY_OUTPUT=$(
           timeout "$DEPLOY_TIMEOUT" vercel deploy \
             --prebuilt \
@@ -192,20 +198,46 @@ runs:
             --token="$VERCEL_TOKEN" \
             $SCOPE_ARG 2>&1
         )
-        DEPLOY_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+' | grep -E 'https://[^ ]+\.vercel\.app/?$' | tail -1)
-        DASHBOARD_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://vercel.com/[^ ]+' | tail -1)
-        SAFE_DASHBOARD_URL=""
-        if [[ -z "$DEPLOY_URL" ]]; then
-          DEPLOY_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+' | tail -1)
-        fi
-        if [[ -z "$DEPLOY_URL" ]]; then
-          echo "::error::Could not parse deployment URL from Vercel output." \
-            "Verify vercel-token has deploy permissions and vercel-project-id is correct"
+        DEPLOY_EXIT=$?
+        set -e
+
+        if [[ "$DEPLOY_EXIT" -ne 0 ]]; then
+          # Always surface the CLI output on failure — capturing it into a variable
+          # and discarding it made real deploy errors undiagnosable from the log.
+          echo "::group::Vercel CLI output (exit $DEPLOY_EXIT)"
+          printf '%s\n' "$DEPLOY_OUTPUT"
+          echo "::endgroup::"
+          if [[ "$DEPLOY_EXIT" -eq 124 ]]; then
+            echo "::error::vercel deploy timed out after $DEPLOY_TIMEOUT."
+          else
+            echo "::error::vercel deploy failed with exit code $DEPLOY_EXIT." \
+              "Verify vercel-token has deploy permissions and vercel-project-id is correct"
+          fi
           exit 1
         fi
-        if [[ -z "$DASHBOARD_URL" ]]; then
+
+        DEPLOY_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+' | grep -E 'https://[^ ]+\.vercel\.app/?$' | tail -1 || true)
+        DASHBOARD_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://vercel.com/[^ ]+' | tail -1 || true)
+        SAFE_DASHBOARD_URL=""
+        if [[ -z "$DEPLOY_URL" ]]; then
+          DEPLOY_URL=$(printf '%s\n' "$DEPLOY_OUTPUT" | grep -Eo 'https://[^ ]+' | tail -1 || true)
+        fi
+        if [[ -z "$DEPLOY_URL" ]]; then
+          # Deploy succeeded; only the URL is missing. Fall back to the API, then
+          # warn rather than fail — the release is live either way.
+          DEPLOY_URL=$(vercel ls --token="$VERCEL_TOKEN" $SCOPE_ARG 2>/dev/null \
+            | grep -Eo 'https://[^ ]+\.vercel\.app' | head -1 || true)
+        fi
+        if [[ -z "$DEPLOY_URL" ]]; then
+          echo "::group::Vercel CLI output (exit 0, no URL parsed)"
+          printf '%s\n' "$DEPLOY_OUTPUT"
+          echo "::endgroup::"
+          echo "::warning::Deployment succeeded but no URL could be parsed from the" \
+            "Vercel output; deployment links in the summary will be omitted."
+        fi
+        if [[ -z "$DASHBOARD_URL" && -n "$DEPLOY_URL" ]]; then
           INSPECT_OUTPUT=$(vercel inspect "$DEPLOY_URL" --token="$VERCEL_TOKEN" $SCOPE_ARG 2>&1 || true)
-          DASHBOARD_URL=$(printf '%s\n' "$INSPECT_OUTPUT" | grep -Eo 'https://vercel.com/[^ ]+' | tail -1)
+          DASHBOARD_URL=$(printf '%s\n' "$INSPECT_OUTPUT" | grep -Eo 'https://vercel.com/[^ ]+' | tail -1 || true)
         fi
         DEPLOYMENT_ID=$(printf '%s\n' "$DASHBOARD_URL" | sed -E 's#/$##' | awk -F'/' '{print $NF}')
         if [[ -n "$DEPLOYMENT_ID" ]] && [[ "$DEPLOYMENT_ID" != *"*"* ]]; then
@@ -247,8 +279,13 @@ runs:
         environment-url: ${{ steps.deploy.outputs.resolved-url }}
         auto-merge: false
 
+    # `always()` so a failed deploy still marks the GitHub deployment failed —
+    # but only when the deployment was actually created. When the deploy step
+    # fails, the create step above never runs, and passing its empty output as
+    # deployment-id made this step error with `HttpError: Not Found`, adding a
+    # second red X that hid the real failure.
     - name: Update Deployment Status
-      if: inputs.github-token != '' && always()
+      if: always() && inputs.github-token != '' && steps.github-deployment.outputs.deployment_id != ''
       uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
       with:
         token: ${{ inputs.github-token }}
