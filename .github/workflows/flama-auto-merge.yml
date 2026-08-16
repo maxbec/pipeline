@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   auto-merge:
-    uses: maxbec/flama-delivery-platform/.github/workflows/reusable-auto-merge.yml@3915526f99c19231cbb08a43ce54e4a9f8f3a012
+    uses: maxbec/flama-delivery-platform/.github/workflows/reusable-auto-merge.yml@330544867f40c1116222ef2769db9da8a8d627cd
     with:
       profile: major
       release-branch: main
