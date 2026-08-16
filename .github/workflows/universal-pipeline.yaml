@@ -405,10 +405,9 @@ jobs:
             # promotion PR open/current whenever dev is ahead (default on; the
             # job only runs on pushes to dev, so repos without dev never see
             # it). auto_release_merge arms auto-merge on the stable
-            # release-please PR; empty means "resolve the default at runtime":
-            # true when a dev branch exists or no deploy provider is
-            # configured, false for single-branch deployed apps (their release
-            # PR is the deliberate ship button).
+            # release-please PR; empty means "use the default", which is
+            # FALSE — nothing merges into `main` without a human. Opt in
+            # explicitly if a repo genuinely wants hands-free releases.
             AUTO_PROMOTION_PR=$(yq_bool '.release.auto_promotion_pr' true)
             AUTO_RELEASE_MERGE=$(yq -r '.release.auto_release_merge // ""' "$CONFIG_FILE")
 
@@ -1707,20 +1706,16 @@ jobs:
           set -euo pipefail
 
           # Resolve the effective setting. Explicit config always wins; the
-          # default is true when a dev branch exists (two-branch repos: the
-          # promotion PR is the only human merge) or when no deploy provider
-          # is configured (libraries/tooling: releases are safe to cut
-          # hands-free), and false for single-branch deployed apps, whose
-          # release PR is the deliberate ship button.
+          # default is FALSE everywhere — nothing merges into `main` without a
+          # human. The previous default armed auto-merge whenever a `dev`
+          # branch existed, on the theory that the promotion PR was the only
+          # human merge; in practice the stable release PR then self-merged
+          # minutes after each promotion landed. A repo that genuinely wants
+          # hands-free releases (a library with no deploy provider) opts in
+          # with `release.auto_release_merge: true`.
           DECISION="$CONFIGURED"
           if [[ -z "$DECISION" || "$DECISION" == "null" ]]; then
-            if gh api "repos/$REPO/branches/dev" >/dev/null 2>&1; then
-              DECISION="true"
-            elif [[ "$DEPLOY_PROVIDER" == "none" ]]; then
-              DECISION="true"
-            else
-              DECISION="false"
-            fi
+            DECISION="false"
           fi
           if [[ "$DECISION" != "true" ]]; then
             echo "::notice::auto_release_merge resolved to '$DECISION' — release PR left for a human merge."
