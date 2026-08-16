@@ -1,5 +1,16 @@
 # Changelog
 
+## [4.0.0](https://github.com/maxbec/pipeline/compare/v3.6.0...v4.0.0) (2026-08-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **release:** repos that relied on the implicit true (any repo with a dev branch, or with deployment.provider: none) now leave the stable release PR open for a human. Set release.auto_release_merge: true to keep the old behaviour.
+
+### 🐛 Bug Fixes
+
+* **release:** never auto-merge into main by default ([#23](https://github.com/maxbec/pipeline/issues/23)) ([e37829d](https://github.com/maxbec/pipeline/commit/e37829dba64160978e85214c4469d5ac651def70))
+
 ## [3.6.0](https://github.com/maxbec/pipeline/compare/v3.5.0...v3.6.0) (2026-08-15)
 
 
