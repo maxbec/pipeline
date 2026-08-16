@@ -1,0 +1,79 @@
+---
+name: 🔎 Release PR checks
+
+# Release PRs on `main` are opened by release-please with GITHUB_TOKEN. GitHub
+# suppresses `pull_request` workflow runs for GITHUB_TOKEN-authored PRs
+# (anti-recursion), so the required checks — Check Gate and Flama Branch Guard —
+# never report and the PR is permanently unmergeable.
+#
+# A close/reopen performed with the App token emits real `pull_request` events,
+# so those checks run and report legitimately. Nothing is skipped, weakened or
+# bypassed: GitHub still enforces every required check at merge time.
+#
+# This workflow ONLY revives the checks. It never merges and never arms
+# auto-merge — merging the release PR is a human decision, like every other
+# merge into `main`. (It replaces the auto-merge half of the former
+# release-automerge.yaml, removed in #30.)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: release-pr-checks-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  revive:
+    name: Re-fire suppressed checks on the release PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 🔑 Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.WORKFLOW_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
+
+      - name: 🔎 Re-fire checks on the stable release PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # release.yaml runs on the same push and needs a moment to open or
+          # update the release PR — poll briefly before concluding no-op.
+          PR_NUMBER=""
+          for _ in 1 2 3 4 5 6; do
+            PR_NUMBER=$(gh pr list --repo "$REPO" --base main --state open \
+              --json number,headRefName \
+              --jq '[.[] | select(.headRefName | startswith("release-please"))][0].number // empty')
+            [[ -n "$PR_NUMBER" ]] && break
+            sleep 20
+          done
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "::notice::No open release PR on main — nothing to do."
+            exit 0
+          fi
+
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json headRefOid --jq .headRefOid)
+
+          CHECKS=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-runs" --jq '.total_count')
+          if [[ "$CHECKS" -gt 0 ]]; then
+            echo "✅ Release PR #$PR_NUMBER already has $CHECKS check run(s) — nothing to do."
+            exit 0
+          fi
+
+          echo "No check runs on $HEAD_SHA — re-firing via App close/reopen of PR #$PR_NUMBER."
+          gh pr close "$PR_NUMBER" --repo "$REPO"
+          sleep 5
+          gh pr reopen "$PR_NUMBER" --repo "$REPO"
+          echo "✅ Checks re-fired on release PR #$PR_NUMBER. Merging it stays a human decision."

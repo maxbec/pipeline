@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.5](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.4...v4.0.0-beta.5) (2026-08-16)
+
+
+### 🐛 Bug Fixes
+
+* **release:** re-fire the release PR's suppressed checks ([#33](https://github.com/maxbec/pipeline/issues/33)) ([2009d7b](https://github.com/maxbec/pipeline/commit/2009d7b73af67949cd79832fcea0b1e6efdf672f))
+
 ## [4.0.0-beta.4](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.3...v4.0.0-beta.4) (2026-08-16)
 
 
