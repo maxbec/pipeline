@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.7](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.6...v4.0.0-beta.7) (2026-08-19)
+
+
+### 🐛 Bug Fixes
+
+* **promote:** stop the promotion PR step dying with SIGPIPE ([#45](https://github.com/maxbec/pipeline/issues/45)) ([c22ccc5](https://github.com/maxbec/pipeline/commit/c22ccc584caa07977bd7c22841dbe7e1a5e8b3cc))
+
 ## [4.0.0-beta.6](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.5...v4.0.0-beta.6) (2026-08-16)
 
 
