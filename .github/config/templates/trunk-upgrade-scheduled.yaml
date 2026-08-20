@@ -22,4 +22,6 @@ jobs:
       contents: write
       pull-requests: write
     uses: maxbec/pipeline/.github/workflows/trunk-upgrade.yaml@v2
-    secrets: inherit
+    secrets:
+      WORKFLOW_APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
+      WORKFLOW_APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}

@@ -44,4 +44,7 @@ jobs:
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                github.event.comment.author_association)
     uses: maxbec/pipeline/.github/workflows/claude-code.yaml@v2
-    secrets: inherit
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      WORKFLOW_APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
+      WORKFLOW_APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}

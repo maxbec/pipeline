@@ -176,8 +176,15 @@ jobs:
 
           # Commit summary since BASE — the promotion PR body doubles as the
           # release preview for the human pressing the button.
-          SUMMARY=$(git log --no-merges --pretty='- %h %s' "origin/$BASE..origin/$HEAD" | head -n 50)
-          TOTAL=$(git log --no-merges --oneline "origin/$BASE..origin/$HEAD" | wc -l)
+          # Bound the log with -n rather than piping into `head`. Under
+          # `set -o pipefail`, `head` closing the pipe after 50 lines kills
+          # `git log` with SIGPIPE and the whole pipeline returns 141, which
+          # fails the step before it prints anything. It only bites in a
+          # repository more than 50 commits ahead, so it presents as an
+          # intermittent fault rather than an arithmetic one: edilio-app/edilio
+          # failed every promotion while smaller repositories promoted fine.
+          SUMMARY=$(git log --no-merges --pretty='- %h %s' -n 50 "origin/$BASE..origin/$HEAD")
+          TOTAL=$(git rev-list --no-merges --count "origin/$BASE..origin/$HEAD")
           if [[ "$TOTAL" -gt 50 ]]; then
             SUMMARY=$(printf '%s\n- … and %s more commit(s)' "$SUMMARY" "$((TOTAL - 50))")
           fi
