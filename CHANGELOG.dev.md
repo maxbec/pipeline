@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.9](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.8...v4.0.0-beta.9) (2026-08-21)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** realign dev with the commits that landed only on main ([#53](https://github.com/maxbec/pipeline/issues/53)) ([4acdfc3](https://github.com/maxbec/pipeline/commit/4acdfc3f23babb6e64ec46c1e55e78d1f79a3081))
+
 ## [4.0.0-beta.8](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.7...v4.0.0-beta.8) (2026-08-21)
 
 
