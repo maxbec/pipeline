@@ -50,7 +50,7 @@ name: 🤖 Claude Code
 #         pull-requests: write
 #         issues: write
 #         id-token: write          # required for claude-code-action OIDC
-#       uses: navigaite/.github/.github/workflows/claude-code.yaml@v2
+#       uses: maxbec/pipeline/.github/workflows/claude-code.yaml@v2
 #       secrets: inherit
 
 on:

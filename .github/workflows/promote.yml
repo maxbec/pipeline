@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   promote:
-    uses: navigaite/.github/.github/workflows/promote-to-main.yaml@v3
+    uses: maxbec/pipeline/.github/workflows/promote-to-main.yaml@v3
     # `inherit` forwards the org `WORKFLOW_APP_ID`/`WORKFLOW_APP_PRIVATE_KEY`
     # secrets so the reusable can mint an app token. A `github.token`-authored
     # promote PR is suppressed by GitHub's anti-recursion rule (required checks

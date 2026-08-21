@@ -15,7 +15,7 @@ name: 🌲 Trunk Upgrade
 #   permissions: {}
 #   jobs:
 #     upgrade:
-#       uses: navigaite/.github/.github/workflows/trunk-upgrade.yaml@v2
+#       uses: maxbec/pipeline/.github/workflows/trunk-upgrade.yaml@v2
 #       secrets: inherit
 
 on:
