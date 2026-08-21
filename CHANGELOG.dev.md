@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.10](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.9...v4.0.0-beta.10) (2026-08-21)
+
+
+### 🐛 Bug Fixes
+
+* **release:** keep the release notes current on a red prerelease branch ([#55](https://github.com/maxbec/pipeline/issues/55)) ([3ec631b](https://github.com/maxbec/pipeline/commit/3ec631bf5ba2f038dce7fbbe69a5d9da94b27777))
+
 ## [4.0.0-beta.9](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.8...v4.0.0-beta.9) (2026-08-21)
 
 
