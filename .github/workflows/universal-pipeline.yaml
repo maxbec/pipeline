@@ -227,6 +227,9 @@ jobs:
       release-force-patch-on-no-release: ${{ steps.parse-config.outputs.release-force-patch-on-no-release }}
       release-extra-plugins: ${{ steps.parse-config.outputs.release-extra-plugins }}
       prerelease-branches: ${{ steps.parse-config.outputs.prerelease-branches }}
+      # Whether the ref this run is on is one of them. The release job needs
+      # this in a job-level `if`, which cannot parse the JSON above.
+      is-prerelease-branch: ${{ steps.parse-config.outputs.is-prerelease-branch }}
       release-config-file: ${{ steps.parse-config.outputs.release-config-file }}
       release-config-file-stable: ${{ steps.parse-config.outputs.release-config-file-stable }}
       release-manifest-file: ${{ steps.parse-config.outputs.release-manifest-file }}
@@ -554,6 +557,9 @@ jobs:
           echo "$RELEASE_EXTRA_PLUGINS" >> $GITHUB_OUTPUT
           echo "PLUGINS_EOF" >> $GITHUB_OUTPUT
           echo "prerelease-branches=$PRERELEASE_BRANCHES" >> $GITHUB_OUTPUT
+          IS_PRERELEASE_BRANCH=$(echo "$PRERELEASE_BRANCHES" \
+            | jq -r --arg b "$GITHUB_REF_NAME" 'any(.[]; .branch == $b)')
+          echo "is-prerelease-branch=$IS_PRERELEASE_BRANCH" >> $GITHUB_OUTPUT
           echo "release-config-file=$RP_CONFIG_FILE" >> $GITHUB_OUTPUT
           echo "release-config-file-stable=$RP_CONFIG_FILE_STABLE" >> $GITHUB_OUTPUT
           echo "release-manifest-file=$RP_MANIFEST_FILE" >> $GITHUB_OUTPUT
@@ -1454,12 +1460,29 @@ jobs:
       release-version: ${{ steps.release-mgmt.outputs.release-version }}
       release-tag: ${{ steps.release-mgmt.outputs.release-tag }}
       release-pr-number: ${{ steps.release-mgmt.outputs.pr-number }}
+    # On a stable branch this job cuts the tag and the GitHub Release, so red
+    # validation still stops it dead.
+    #
+    # On a prerelease branch it now runs anyway, and cuts nothing when
+    # validation was red — see `skip-github-release` below. Skipping it there
+    # meant the open release pull request was never refreshed for the commits
+    # of a red push, so its changelog quietly stopped describing the branch.
+    # Measured on edilio-app/edilio: seven red pushes to `dev` in three weeks,
+    # one of which left the release notes stale for three days. Nothing
+    # backfills them — the next green push picks up everything still
+    # unreleased, which is correct, but a promotion that happens before that
+    # ships a changelog that does not describe `main`.
     if: |
       always() &&
       needs.setup.outputs.enable-release == 'true' &&
       github.event_name == 'push' &&
-      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+      (
+        (
+          (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
+          (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+        ) ||
+        needs.setup.outputs.is-prerelease-branch == 'true'
+      )
     steps:
       # Minting the installation token in-job is deliberate: passing a token
       # through `needs.*.outputs.*` makes GitHub Actions strip it with the
@@ -1526,11 +1549,35 @@ jobs:
             echo "Using default config: $DEFAULT_CONFIG"
           fi
 
+      # Refreshing a release pull request from a red tree is safe: it writes a
+      # changelog, and the pull request is validated in its own right before
+      # anyone merges it. Cutting a tag and a GitHub Release from a red tree is
+      # not. This separates the two, so a red prerelease push keeps the release
+      # notes current without publishing anything.
+      - name: 🚧 Decide whether a release may be cut
+        id: cut
+        shell: bash
+        env:
+          STATIC_RESULT: ${{ needs.static-checks.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          set -euo pipefail
+          skip=false
+          for pair in "static-checks:$STATIC_RESULT" "verify:$VERIFY_RESULT"; do
+            res="${pair#*:}"
+            if [[ "$res" != "success" && "$res" != "skipped" ]]; then
+              echo "::warning::${pair%%:*} did not pass (result=$res). Refreshing the release pull request, but no release will be cut from this commit."
+              skip=true
+            fi
+          done
+          echo "skip-github-release=$skip" >> "$GITHUB_OUTPUT"
+
       - name: 📦 Run Release Management
         id: release-mgmt
         uses: maxbec/pipeline/.github/actions/release-management@v3
         with:
           github-token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          skip-github-release: ${{ steps.cut.outputs.skip-github-release }}
           npm-token: ${{ secrets.NPM_TOKEN }}
           strategy: ${{ needs.setup.outputs.release-strategy }}
           force-patch-on-no-release: ${{ needs.setup.outputs.release-force-patch-on-no-release }}
