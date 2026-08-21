@@ -91,6 +91,16 @@ inputs:
     required: false
     default: 'true'
 
+  skip-github-release:
+    description: >-
+      Refresh the release pull request but do not tag or publish a GitHub
+      Release from this commit. Set by the caller when the validation stages
+      did not pass: the changelog must stay current even on a red branch, but
+      a release must never be cut from one. Only applies to the release-please
+      strategy.
+    required: false
+    default: 'false'
+
 outputs:
   release-created:
     description: Whether a release was created
@@ -252,6 +262,7 @@ runs:
         config-file: ${{ inputs.config-file }}
         manifest-file: ${{ inputs.manifest-file || '.release-please-manifest.json' }}
         target-branch: ${{ inputs.target-branch || github.ref_name }}
+        skip-github-release: ${{ inputs.skip-github-release }}
 
     - name: Run Release Please (legacy mode)
       id: release-please
@@ -261,6 +272,7 @@ runs:
         token: ${{ inputs.github-token }}
         release-type: ${{ inputs.release-type }}
         target-branch: ${{ inputs.target-branch || github.ref_name }}
+        skip-github-release: ${{ inputs.skip-github-release }}
 
     - name: Run Semantic Release
       id: semantic-release

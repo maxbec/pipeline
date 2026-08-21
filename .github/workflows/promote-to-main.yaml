@@ -174,6 +174,54 @@ jobs:
           BASE_SHA=$(git rev-parse "origin/$BASE")
           HEAD_SHA=$(git rev-parse "origin/$HEAD")
 
+          # Precondition 2b: the release notes must describe what is promoted.
+          #
+          # Precondition 1 asks "is a release pull request open on $HEAD" — but
+          # that is also false when release-please never ran at all, which is
+          # exactly the failure this guards. release-please only refreshes its
+          # pull request from the pipeline's Release Management job, and that
+          # job used to be skipped on every red push, so a red last push left
+          # the changelog describing an older $HEAD while this workflow saw a
+          # clean board and promoted anyway.
+          #
+          # Only enforced where release-please actually owns the versions;
+          # repositories without its config are left alone.
+          if compgen -G 'release-please-config*.json' >/dev/null 2>&1 \
+            || compgen -G '.release-please-manifest*.json' >/dev/null 2>&1 \
+            || compgen -G '.github/release-please-config*.json' >/dev/null 2>&1; then
+            RELEASE_RUN=$(gh api -H 'Accept: application/vnd.github+json' \
+              "/repos/$REPO/commits/$HEAD_SHA/check-runs?filter=all&per_page=100" \
+              --jq '[.check_runs[] | select(.name | test("Release Management"))]
+                    | sort_by(.started_at) | last
+                    | if . == null then "" else "\(.status):\(.conclusion // "")" end' \
+              2>/dev/null || printf '')
+
+            case "$RELEASE_RUN" in
+              '')
+                echo "::warning::No Release Management check run on $HEAD_SHA — cannot confirm the release notes are current. Promoting anyway."
+                ;;
+              completed:success)
+                echo "Release notes for $HEAD_SHA are current."
+                ;;
+              completed:*)
+                if [[ "$AUTO" == "true" ]]; then
+                  echo "::notice::Release Management on $HEAD_SHA ended ${RELEASE_RUN#completed:} — promotion deferred until the release notes are refreshed."
+                  exit 0
+                fi
+                echo "::error::Release Management on $HEAD_SHA ended ${RELEASE_RUN#completed:}, so the release notes do not describe $HEAD. Re-run the pipeline on $HEAD (gh workflow run ci.yaml --ref $HEAD) and promote once it is green."
+                exit 1
+                ;;
+              *)
+                if [[ "$AUTO" == "true" ]]; then
+                  echo "::notice::Release Management on $HEAD_SHA is still running — promotion deferred."
+                  exit 0
+                fi
+                echo "::error::Release Management on $HEAD_SHA has not finished yet, so the release notes may not describe $HEAD. Wait for the pipeline on $HEAD and promote again."
+                exit 1
+                ;;
+            esac
+          fi
+
           # Commit summary since BASE — the promotion PR body doubles as the
           # release preview for the human pressing the button.
           # Bound the log with -n rather than piping into `head`. Under
