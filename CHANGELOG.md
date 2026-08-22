@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.0.4](https://github.com/maxbec/pipeline/compare/v4.0.3...v4.0.4) (2026-08-22)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** realign dev with the commits that landed only on main ([#53](https://github.com/maxbec/pipeline/issues/53)) ([4acdfc3](https://github.com/maxbec/pipeline/commit/4acdfc3f23babb6e64ec46c1e55e78d1f79a3081))
+* **release:** align stable manifest with main at 4.0.3 ([#50](https://github.com/maxbec/pipeline/issues/50)) ([70c9e3e](https://github.com/maxbec/pipeline/commit/70c9e3eaa8ae3e2be4d210063e3da437821df5ff))
+* **release:** keep the release notes current on a red prerelease branch ([#55](https://github.com/maxbec/pipeline/issues/55)) ([3ec631b](https://github.com/maxbec/pipeline/commit/3ec631bf5ba2f038dce7fbbe69a5d9da94b27777))
+
 ## [4.0.3](https://github.com/maxbec/pipeline/compare/v4.0.2...v4.0.3) (2026-08-21)
 
 
