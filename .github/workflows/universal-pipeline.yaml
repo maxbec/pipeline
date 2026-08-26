@@ -210,6 +210,7 @@ jobs:
       deploy-provider: ${{ steps.parse-config.outputs.deploy-provider }}
       deploy-environments: ${{ steps.parse-config.outputs.deploy-environments }}
       docker-images: ${{ steps.parse-config.outputs.docker-images }}
+      docker-cache-backend: ${{ steps.parse-config.outputs.docker-cache-backend }}
       vercel-scope: ${{ steps.parse-config.outputs.vercel-scope }}
       vercel-build-command: ${{ steps.parse-config.outputs.vercel-build-command }}
       digitalocean-app-name: ${{ steps.parse-config.outputs.digitalocean-app-name }}
@@ -460,6 +461,11 @@ jobs:
 
             # Extract Docker image definitions for multi-image builds
             DOCKER_IMAGES=$(yq -o=json -I=0 '.deployment.docker.images // []' "$CONFIG_FILE" | jq -c '.')
+            # Where the buildx layer cache lives. `gha` suits hosted runners;
+            # `local` keeps the export on the runner's own disk, which matters
+            # on self-hosted, where mode=max otherwise ships every intermediate
+            # layer over the WAN — measured at 438s of a 634s build on edilio.
+            DOCKER_CACHE_BACKEND=$(yq -r '.deployment.docker.cache_backend // "gha"' "$CONFIG_FILE")
             if [[ "$DEPLOY_PROVIDER" == "docker" && "$DOCKER_IMAGES" == "[]" ]]; then
               # Fallback: single image from repo name with default Dockerfile
               DOCKER_IMAGES='[{"name":"default","dockerfile":"Dockerfile"}]'
@@ -538,6 +544,7 @@ jobs:
           echo "deploy-provider=$DEPLOY_PROVIDER" >> $GITHUB_OUTPUT
           echo "deploy-environments=$DEPLOY_ENVS" >> $GITHUB_OUTPUT
           echo "docker-images=$DOCKER_IMAGES" >> $GITHUB_OUTPUT
+          echo "docker-cache-backend=$DOCKER_CACHE_BACKEND" >> $GITHUB_OUTPUT
           echo "vercel-scope=$VERCEL_SCOPE" >> $GITHUB_OUTPUT
           echo "vercel-build-command<<VERCEL_BUILD_EOF" >> $GITHUB_OUTPUT
           echo "$VERCEL_BUILD_COMMAND" >> $GITHUB_OUTPUT
@@ -1441,6 +1448,11 @@ jobs:
           platforms: ${{ matrix.image.platforms || 'linux/amd64' }}
           registry-password: ${{ secrets.DOCKER_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
           registry-username: ${{ secrets.DOCKER_REGISTRY_USERNAME || github.actor }}
+          cache-backend: ${{ needs.setup.outputs.docker-cache-backend }}
+          # Per-image separation, so two images in one repo cannot overwrite
+          # each other's cache — `scope` does that for gha, a subdirectory for
+          # local.
+          cache-scope: ${{ matrix.image.name }}
 
   # =============================================================================
   # RELEASE MANAGEMENT
