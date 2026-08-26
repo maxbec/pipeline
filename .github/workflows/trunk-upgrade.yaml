@@ -186,7 +186,9 @@ jobs:
             Automated `trunk upgrade` run.
 
             Produced by [`navigaite/.github` trunk-upgrade workflow](https://github.com/navigaite/.github/blob/main/.github/workflows/trunk-upgrade.yaml).
-            Auto-merges after `Check Gate` passes.
+            Auto-merges after `Check Gate` passes, where the base branch has
+            required status checks. Where it has none, this waits for the
+            repository's own merge gate or a human instead.
           delete-branch: true
           signoff: true
           # Commit via the GitHub Contents API so the commit is signed with the
@@ -201,7 +203,30 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.token.outputs.value }}
           PR: ${{ steps.cpr.outputs.pull-request-number }}
+          BASE: ${{ steps.base.outputs.name }}
         run: |
           set -euo pipefail
-          gh pr merge "$PR" --squash --auto
-          echo "::notice::Auto-merge enabled on PR #$PR"
+
+          # `--auto` only holds a pull request where the base branch has
+          # REQUIRED STATUS CHECKS. Where it has none, GitHub has nothing to
+          # wait for and merges on mergeability alone — which is instantly.
+          # Measured on edilio-app/edilio 2026-08-26: the pull request was
+          # created at 04:53:15 and merged at 04:53:18, three seconds later,
+          # while its own gate runs only started at 04:53:19. It landed on
+          # `dev` with a failed policy gate and no Paperclip Preflight at all,
+          # and the push guard opened an unguarded-commit issue for it. That
+          # repeats every week this workflow runs.
+          #
+          # Branch protection is exactly what those repositories cannot buy —
+          # the API answers 403 on a private repo in a Free org — so detect it
+          # and stand down rather than arming a merge nothing will hold. The
+          # repository's own merge gate (or a person) takes it from here.
+          checks=$(gh api "repos/$GITHUB_REPOSITORY/branches/$BASE/protection/required_status_checks" \
+            --jq '[(.contexts // []), (.checks // [] | map(.context))] | flatten | length' 2>/dev/null || echo 0)
+
+          if [[ "${checks:-0}" -gt 0 ]]; then
+            gh pr merge "$PR" --squash --auto
+            echo "::notice::Auto-merge enabled on PR #$PR ($checks required check(s) on $BASE)."
+          else
+            echo "::notice::$BASE has no required status checks — not arming auto-merge on PR #$PR, because GitHub would merge it immediately. Leaving it for the repository's merge gate."
+          fi
