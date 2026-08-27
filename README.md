@@ -256,7 +256,11 @@ test:     { enable: true, coverage: true }
 build:    { enable: true }
 
 deployment:
-  provider: vercel              # vercel | digitalocean | docker
+  provider: vercel              # vercel | cloudflare-workers | digitalocean | docker
+  cloudflare:                   # provider: cloudflare-workers
+    config: wrangler.jsonc      # default; path is relative to working-directory
+    # Default suits @opennextjs/cloudflare. A plain Worker needs no build.
+    build_command: npm run build && npx opennextjs-cloudflare build
   environments:
     - name: preview
       trigger: { event: pull_request }

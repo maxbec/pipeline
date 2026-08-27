@@ -1,0 +1,156 @@
+---
+name: Deploy to Cloudflare Workers
+description: Build and deploy a Worker with wrangler, mapping the pipeline environment onto a wrangler environment
+
+inputs:
+  cloudflare-api-token:
+    description: Cloudflare API token with Workers Scripts:Edit on the target account
+    required: true
+
+  cloudflare-account-id:
+    description: Cloudflare account ID the Worker belongs to
+    required: true
+
+  environment:
+    description: Deployment environment (preview or production)
+    required: true
+
+  build-command:
+    description: >
+      Command that produces the Worker bundle. The default suits a Next app
+      using @opennextjs/cloudflare; a plain Worker usually needs no build at all
+      and can pass a no-op.
+    required: false
+    default: npm run build && npx opennextjs-cloudflare build
+
+  wrangler-config:
+    description: Path to the wrangler config, relative to working-directory
+    required: false
+    default: wrangler.jsonc
+
+  working-directory:
+    description: Working directory
+    required: false
+    default: .
+
+  github-token:
+    description: GitHub token for the deployment record
+    required: false
+    default: ''
+
+outputs:
+  url:
+    description: The deployed Worker URL, as reported by wrangler
+    value: ${{ steps.deploy.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate Inputs
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        WORKING_DIR: ${{ inputs.working-directory }}
+        WRANGLER_CONFIG: ${{ inputs.wrangler-config }}
+      run: |
+        set -euo pipefail
+
+        # Only the two deployed environments exist. `development` is local-only
+        # and must never reach Cloudflare — see ENVIRONMENT_CONVENTION.md.
+        case "${ENVIRONMENT,,}" in
+        preview | production) ;;
+        *)
+          echo "::error::Unsupported environment '$ENVIRONMENT'. Cloudflare deployments accept 'preview' or 'production'."
+          exit 1
+          ;;
+        esac
+
+        if [[ ! -f "$WORKING_DIR/$WRANGLER_CONFIG" ]]; then
+          echo "::error::No wrangler config at $WORKING_DIR/$WRANGLER_CONFIG. A Cloudflare deployment needs one; set deployment.cloudflare.config to point at it."
+          exit 1
+        fi
+
+    - name: 🏗️ Build the Worker bundle
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BUILD_COMMAND: ${{ inputs.build-command }}
+        # Code keys off APP_ENV, never the provider's own env var.
+        APP_ENV: ${{ inputs.environment }}
+      run: |
+        set -euo pipefail
+        if [[ -z "${BUILD_COMMAND// /}" ]]; then
+          echo "::notice::No build command configured; deploying the working tree as-is."
+          exit 0
+        fi
+        echo "::group::🏗️ $BUILD_COMMAND"
+        eval "$BUILD_COMMAND"
+        echo "::endgroup::"
+
+    - name: 🚀 Deploy with wrangler
+      id: deploy
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare-api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare-account-id }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        WRANGLER_CONFIG: ${{ inputs.wrangler-config }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "$CLOUDFLARE_API_TOKEN" || -z "$CLOUDFLARE_ACCOUNT_ID" ]]; then
+          echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are both required. Forward them from the caller's secrets."
+          exit 1
+        fi
+
+        # `production` is wrangler's top-level config, and an empty --env is how
+        # you ask for it explicitly. Leaving the flag off entirely is an error
+        # when the config declares named environments, because wrangler cannot
+        # tell "top level" from "you forgot".
+        if [[ "${ENVIRONMENT,,}" == "production" ]]; then
+          ENV_FLAG=(--env "")
+        else
+          ENV_FLAG=(--env "$ENVIRONMENT")
+        fi
+
+        echo "::group::🚀 wrangler deploy (${ENVIRONMENT})"
+        set +e
+        OUTPUT=$(npx --yes wrangler@4 deploy --config "$WRANGLER_CONFIG" "${ENV_FLAG[@]}" 2>&1)
+        STATUS=$?
+        set -e
+        echo "$OUTPUT"
+        echo "::endgroup::"
+
+        if [[ $STATUS -ne 0 ]]; then
+          echo "::error::wrangler deploy failed for $ENVIRONMENT (exit $STATUS)."
+          exit $STATUS
+        fi
+
+        # wrangler prints the route or workers.dev hostname it published to.
+        URL=$(grep -oE 'https://[A-Za-z0-9._-]+\.workers\.dev|https://[A-Za-z0-9._-]+/[A-Za-z0-9._/-]*' <<<"$OUTPUT" | head -1 || true)
+        echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+        {
+          echo "### 🚀 Cloudflare Workers — $ENVIRONMENT"
+          echo
+          [[ -n "$URL" ]] && echo "Deployed to $URL" || echo "Deployed (wrangler reported no URL; check the route configuration)."
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: 📝 Record the deployment
+      if: inputs.github-token != '' && steps.deploy.outputs.url != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ENVIRONMENT: ${{ inputs.environment }}
+        URL: ${{ steps.deploy.outputs.url }}
+      run: |
+        set -euo pipefail
+        # Best-effort: a missing deployment record must not fail a deploy that
+        # already succeeded.
+        DEPLOYMENT_ID=$(gh api "repos/$GITHUB_REPOSITORY/deployments" \
+          -f ref="$GITHUB_SHA" -f environment="$ENVIRONMENT" \
+          -F auto_merge=false -F required_contexts='[]' \
+          --jq '.id' 2>/dev/null) || exit 0
+        gh api "repos/$GITHUB_REPOSITORY/deployments/$DEPLOYMENT_ID/statuses" \
+          -f state=success -f environment_url="$URL" >/dev/null 2>&1 || true
