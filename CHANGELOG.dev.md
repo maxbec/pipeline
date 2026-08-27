@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.12](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.11...v4.0.0-beta.12) (2026-08-27)
+
+
+### ✨ Features
+
+* **deploy:** add a cloudflare-workers provider ([#62](https://github.com/maxbec/pipeline/issues/62)) ([ecd43b4](https://github.com/maxbec/pipeline/commit/ecd43b4ac6ef3e85a92ea6337020c7064a05f3e6))
+
 ## [4.0.0-beta.11](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.10...v4.0.0-beta.11) (2026-08-26)
 
 
