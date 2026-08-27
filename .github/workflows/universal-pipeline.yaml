@@ -72,6 +72,16 @@ on:
         required: false
 
       # Vercel secrets
+      CLOUDFLARE_API_TOKEN:
+        description: |
+          Cloudflare API token with Workers Scripts:Edit on the target account
+          (deploy provider: cloudflare-workers)
+        required: false
+      CLOUDFLARE_ACCOUNT_ID:
+        description: |
+          Cloudflare account the Worker belongs to
+          (deploy provider: cloudflare-workers)
+        required: false
       VERCEL_TOKEN:
         required: false
       VERCEL_ORG_ID:
@@ -217,6 +227,8 @@ jobs:
       digitalocean-app-spec: ${{ steps.parse-config.outputs.digitalocean-app-spec }}
       digitalocean-print-build-logs: ${{ steps.parse-config.outputs.digitalocean-print-build-logs }}
       digitalocean-print-deploy-logs: ${{ steps.parse-config.outputs.digitalocean-print-deploy-logs }}
+      cloudflare-config: ${{ steps.parse-config.outputs.cloudflare-config }}
+      cloudflare-build-command: ${{ steps.parse-config.outputs.cloudflare-build-command }}
 
       # Release configuration
       enable-sync: ${{ steps.parse-config.outputs.enable-sync }}
@@ -296,6 +308,8 @@ jobs:
             DOCKER_IMAGES="[]"
             VERCEL_SCOPE=""
             VERCEL_BUILD_COMMAND=""
+            CLOUDFLARE_CONFIG="wrangler.jsonc"
+            CLOUDFLARE_BUILD_COMMAND=""
             DIGITALOCEAN_APP_NAME=""
             DIGITALOCEAN_APP_SPEC=".do/app.yaml"
             DIGITALOCEAN_PRINT_BUILD_LOGS="true"
@@ -382,6 +396,10 @@ jobs:
             ENABLE_DEPLOY=$([ "$DEPLOY_PROVIDER" != "none" ] && echo "true" || echo "false")
             VERCEL_SCOPE=$(yq -r '.deployment.vercel.scope // ""' "$CONFIG_FILE")
             VERCEL_BUILD_COMMAND=$(yq -r '.deployment.vercel.build_command // ""' "$CONFIG_FILE")
+            CLOUDFLARE_CONFIG=$(yq -r '.deployment.cloudflare.config // "wrangler.jsonc"' "$CONFIG_FILE")
+            # Empty means "deploy the tree as-is". The Worker action supplies the
+            # OpenNext default when this is unset, so a Next app needs no entry.
+            CLOUDFLARE_BUILD_COMMAND=$(yq -r '.deployment.cloudflare.build_command // ""' "$CONFIG_FILE")
             DIGITALOCEAN_APP_NAME=$(yq -r '.deployment.digitalocean.app_name // ""' "$CONFIG_FILE")
             DIGITALOCEAN_APP_SPEC=$(yq -r '.deployment.digitalocean.app_spec // ".do/app.yaml"' "$CONFIG_FILE")
             DIGITALOCEAN_PRINT_BUILD_LOGS=$(yq_bool '.deployment.digitalocean.print_logs' true)
@@ -549,6 +567,12 @@ jobs:
           echo "vercel-build-command<<VERCEL_BUILD_EOF" >> $GITHUB_OUTPUT
           echo "$VERCEL_BUILD_COMMAND" >> $GITHUB_OUTPUT
           echo "VERCEL_BUILD_EOF" >> $GITHUB_OUTPUT
+          echo "cloudflare-config=$CLOUDFLARE_CONFIG" >> $GITHUB_OUTPUT
+          # Delimited like the Vercel one: a build command may contain
+          # newlines, which a plain key=value line cannot carry.
+          echo "cloudflare-build-command<<CLOUDFLARE_BUILD_EOF" >> $GITHUB_OUTPUT
+          echo "$CLOUDFLARE_BUILD_COMMAND" >> $GITHUB_OUTPUT
+          echo "CLOUDFLARE_BUILD_EOF" >> $GITHUB_OUTPUT
           echo "digitalocean-app-name=$DIGITALOCEAN_APP_NAME" >> $GITHUB_OUTPUT
           echo "digitalocean-app-spec=$DIGITALOCEAN_APP_SPEC" >> $GITHUB_OUTPUT
           echo "digitalocean-print-build-logs=$DIGITALOCEAN_PRINT_BUILD_LOGS" >> $GITHUB_OUTPUT
@@ -1296,6 +1320,135 @@ jobs:
           github-token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
           working-directory: ${{ inputs.working-directory }}
           build-command: ${{ needs.setup.outputs.vercel-build-command }}
+
+  deploy-cloudflare:
+    name: 🚀 Cloudflare / ${{ matrix.environment }}
+    # Trusted-publishing-style OIDC is not available for wrangler, so this runs
+    # wherever the org points its runners, same as the other providers.
+    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+      id-token: write # OIDC for cloud providers
+    # Gate on the merged static-checks (security + lint) and verify (test +
+    # build) jobs.
+    needs: [setup, static-checks, verify]
+    if: |
+      always() &&
+      needs.setup.outputs.enable-deploy == 'true' &&
+      needs.setup.outputs.deploy-provider == 'cloudflare-workers' &&
+      needs.setup.outputs.docs-only != 'true' &&
+      needs.setup.outputs.deploy-environments != '[]' &&
+      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
+      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: ${{ fromJSON(needs.setup.outputs.deploy-environments).*.name }}
+    environment:
+      name: ${{ matrix.environment }}
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 🔧 Setup Node Runtime
+        if: needs.setup.outputs.stack == 'nodejs'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.setup.outputs.runtime-version }}
+
+      # The Worker is built here, not in `verify`, so the build sees the target
+      # environment's secrets. Installing first is what makes that build possible.
+      - name: 📦 Install Dependencies
+        if: needs.setup.outputs.stack == 'nodejs'
+        uses: maxbec/pipeline/.github/actions/install-dependencies@v3
+        with:
+          stack: ${{ needs.setup.outputs.stack }}
+          package-manager: ${{ needs.setup.outputs.package-manager }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - name: 🔍 Check Infisical Configuration
+        id: infisical-config
+        shell: bash
+        env:
+          DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
+          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_SLUG_RAW: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
+          INFISICAL_PROD_ENV_SLUG: ${{ vars.INFISICAL_PROD_ENV_SLUG }}
+          INFISICAL_PREVIEW_ENV_SLUG: ${{ vars.INFISICAL_PREVIEW_ENV_SLUG }}
+        run: |
+          set -euo pipefail
+          # Map the GitHub deployment environment to an Infisical environment slug.
+          # Defaults match the most common Infisical project (production / preview),
+          # but can be overridden per repo by setting vars.INFISICAL_PROD_ENV_SLUG
+          # and vars.INFISICAL_PREVIEW_ENV_SLUG — for example, edilio uses
+          # `prod` and `staging`.
+          case "${DEPLOY_ENVIRONMENT,,}" in
+          production) RESOLVED_ENV_SLUG="${INFISICAL_PROD_ENV_SLUG:-production}" ;;
+          *) RESOLVED_ENV_SLUG="${INFISICAL_PREVIEW_ENV_SLUG:-preview}" ;;
+          esac
+
+          if [[ -z "$INFISICAL_PROJECT_SLUG_RAW" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "project-slug=$INFISICAL_PROJECT_SLUG_RAW" >> "$GITHUB_OUTPUT"
+          echo "env-slug=$RESOLVED_ENV_SLUG" >> "$GITHUB_OUTPUT"
+          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "method=oidc" >> "$GITHUB_OUTPUT"
+            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (OIDC)"
+          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "method=universal" >> "$GITHUB_OUTPUT"
+            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (Universal Auth)"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 🔐 Load Infisical Secrets (OIDC)
+        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'oidc'
+        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
+        with:
+          method: oidc
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
+          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
+          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+
+      - name: 🔐 Load Infisical Secrets (Universal Auth)
+        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
+        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
+        with:
+          method: universal
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
+          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          extra-headers: |
+            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+
+      - name: 🚀 Deploy to Cloudflare Workers
+        uses: maxbec/pipeline/.github/actions/deploy-cloudflare@v3
+        with:
+          cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          environment: ${{ matrix.environment }}
+          build-command: ${{ needs.setup.outputs.cloudflare-build-command }}
+          wrangler-config: ${{ needs.setup.outputs.cloudflare-config }}
+          working-directory: ${{ inputs.working-directory }}
+          github-token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
 
   deploy-digitalocean:
     name: 🚀 DigitalOcean / ${{ matrix.environment }}
