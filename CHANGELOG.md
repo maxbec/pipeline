@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.7](https://github.com/maxbec/pipeline/compare/v4.0.6...v4.0.7) (2026-08-27)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** call the composite actions at the v4 major tag ([#69](https://github.com/maxbec/pipeline/issues/69)) ([65339a3](https://github.com/maxbec/pipeline/commit/65339a39bbfc2d1d720888f99d163efa0e1291c5))
+
 ## [4.0.6](https://github.com/maxbec/pipeline/compare/v4.0.5...v4.0.6) (2026-08-27)
 
 
