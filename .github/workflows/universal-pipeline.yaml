@@ -453,11 +453,14 @@ jobs:
               RELEASE_STRATEGY="release-please"
             fi
 
-            if [[ "$DEPLOY_PROVIDER" != "vercel" && "$DEPLOY_PROVIDER" != "digitalocean" && "$DEPLOY_PROVIDER" != "docker" && "$DEPLOY_PROVIDER" != "none" ]]; then
+            case "$DEPLOY_PROVIDER" in
+            vercel | cloudflare-workers | digitalocean | docker | none) ;;
+            *)
               echo "::warning::Unsupported deployment.provider '$DEPLOY_PROVIDER'. Falling back to 'none'"
               DEPLOY_PROVIDER="none"
               ENABLE_DEPLOY="false"
-            fi
+              ;;
+            esac
 
             # Extract deployment environments
             DEPLOY_ENVS=$(yq -o=json '.deployment.environments // []' "$CONFIG_FILE")
