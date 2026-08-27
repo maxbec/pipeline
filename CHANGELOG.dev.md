@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.13](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.12...v4.0.0-beta.13) (2026-08-27)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** accept cloudflare-workers in the provider validation ([#65](https://github.com/maxbec/pipeline/issues/65)) ([e3aecb4](https://github.com/maxbec/pipeline/commit/e3aecb498439c7278b6ebbab3cc0ef803d13bcc0))
+
 ## [4.0.0-beta.12](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.11...v4.0.0-beta.12) (2026-08-27)
 
 
