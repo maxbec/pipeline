@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.5](https://github.com/maxbec/pipeline/compare/v4.0.4...v4.0.5) (2026-08-26)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** local buildx cache option, and stop trunk-upgrade merging ungated ([#58](https://github.com/maxbec/pipeline/issues/58)) ([0fe0acb](https://github.com/maxbec/pipeline/commit/0fe0acb6c865ee9c47ed4caa87018fe8979c859b))
+
 ## [4.0.4](https://github.com/maxbec/pipeline/compare/v4.0.3...v4.0.4) (2026-08-22)
 
 
