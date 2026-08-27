@@ -83,7 +83,7 @@ Each stage is independently toggleable via the consumer's `.github/pipeline.yaml
 
 ### Q2 — Deployment provider (required)
 
-> Which deploy provider: `vercel`, `digitalocean`, `docker` (GHCR), or `none`?
+> Which deploy provider: `vercel`, `cloudflare-workers`, `digitalocean`, `docker` (GHCR), or `none`?
 
 - Choose `none` if the user deploys via a custom job/webhook — you will add that job next to the `pipeline` job.
 - `deploy-coolify` and `deploy-render` exist as standalone composite actions, but are not wired into `universal-pipeline.yaml`.
@@ -375,7 +375,7 @@ Minimal Profile A config:
 version: '2.0'
 
 deployment:
-  provider: vercel              # [MANDATORY if deploying] vercel|digitalocean|docker|none
+  provider: vercel              # [MANDATORY if deploying] vercel|cloudflare-workers|digitalocean|docker|none
   environments:                 # [MANDATORY if deploying]
     - name: preview
       trigger:
@@ -417,6 +417,7 @@ Add to repo Settings → Secrets → Actions:
 | Provider | Required secrets |
 | --- | --- |
 | **Vercel** | `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` |
+| **Cloudflare Workers** | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` |
 | **DigitalOcean** | `DIGITALOCEAN_TOKEN` |
 | **Docker / GHCR** | defaults to `GITHUB_TOKEN`; override with `DOCKER_REGISTRY_USERNAME` + `DOCKER_REGISTRY_PASSWORD` |
 | **Coolify** | `COOLIFY_URL`, `COOLIFY_TOKEN` |
