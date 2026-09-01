@@ -510,6 +510,41 @@ jobs:
             ENABLE_SYNC="false"
           fi
 
+          # Release contract drift. `.flama/delivery-contract.json` is the
+          # centrally generated statement of what a repo is supposed to do;
+          # `.github/pipeline.yaml` is what this workflow actually obeys. They
+          # are written by different systems and nothing reconciled them, so a
+          # repo could carry `release.enabled: true` in its contract and
+          # `release.enable: false` here and simply stop releasing. That is not
+          # hypothetical: maimaldrei-dispoplaner did exactly this from the
+          # NAV-20 migration (2026-07-26) until 2026-09-01 — no release, no
+          # failure, no annotation, nothing to notice.
+          #
+          # Asymmetric on purpose:
+          #   contract=true, pipeline=false -> fail. The failure mode is silence.
+          #   contract=false, pipeline=true -> warn. Releases visibly happen, so
+          #     a stale contract is self-evident; failing here would block repos
+          #     that ship correctly today (eslint-config, nvgt-website).
+          # Downgraded to a warning when the repo has no pipeline.yaml at all —
+          # that repo has not been migrated, which is a different problem.
+          CONTRACT_FILE=".flama/delivery-contract.json"
+          if [[ -f "$CONTRACT_FILE" ]]; then
+            # Not `// "absent"`: jq's alternative operator treats a literal
+            # `false` as empty, which would silently collapse the
+            # contract-says-no case into contract-says-nothing.
+            CONTRACT_RELEASE=$(jq -r '.release.enabled | if . == null then "absent" else tostring end' "$CONTRACT_FILE")
+            DRIFT_MSG="Flama contract says release.enabled=${CONTRACT_RELEASE} but .github/pipeline.yaml resolves release.enable=${ENABLE_RELEASE}"
+            if [[ "$CONTRACT_RELEASE" == "true" && "$ENABLE_RELEASE" != "true" ]]; then
+              if [[ -f "$CONFIG_FILE" ]]; then
+                echo "::error title=Release contract drift::${DRIFT_MSG}. This repo is configured to release but the pipeline will skip Release Management, so no version, tag or changelog will ever be produced. Set 'release.enable: true' in .github/pipeline.yaml, or correct the contract if this repo genuinely does not release."
+                exit 1
+              fi
+              echo "::warning title=Release contract drift::${DRIFT_MSG} (no .github/pipeline.yaml — repo not migrated to the universal pipeline)"
+            elif [[ "$CONTRACT_RELEASE" == "false" && "$ENABLE_RELEASE" == "true" ]]; then
+              echo "::warning title=Release contract drift::${DRIFT_MSG}. Releases are being produced against a contract that says this repo does not release — regenerate the contract."
+            fi
+          fi
+
           # Resolve the branch-appropriate release-please manifest. On a
           # non-prerelease branch (e.g. main) use the stable manifest when one
           # is configured; otherwise the default manifest. Keeps the beta (dev)
