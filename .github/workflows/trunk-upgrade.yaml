@@ -186,7 +186,7 @@ jobs:
             Automated `trunk upgrade` run.
 
             Produced by [`navigaite/.github` trunk-upgrade workflow](https://github.com/navigaite/.github/blob/main/.github/workflows/trunk-upgrade.yaml).
-            Auto-merges after `Check Gate` passes, where the base branch has
+            Auto-merges after `pipeline / Check` passes, where the base branch has
             required status checks. Where it has none, this waits for the
             repository's own merge gate or a human instead.
           delete-branch: true

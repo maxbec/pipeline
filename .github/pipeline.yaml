@@ -1,0 +1,16 @@
+---
+# maxbec/pipeline checks itself: the tests pull the Guard and Deploy scripts out
+# of universal-pipeline.yaml and run them. Nothing to build or deploy — a
+# published release of this repository is what callers repin to.
+version: '3'
+stack: nodejs
+security:
+  dependency_review: true
+lint:
+  enable: false
+test:
+  command: npm test
+build:
+  enable: false
+deploy:
+  provider: none
