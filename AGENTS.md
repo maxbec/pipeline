@@ -61,7 +61,7 @@ scripts/                                    repo bootstrap and org maintenance h
 ## 5. Testing
 
 ```sh
-npm test        # node --test test/  — needs yq and bash on PATH
+npm test        # node --test "test/**/*.test.mjs" — needs yq and bash on PATH
 actionlint      # https://github.com/rhysd/actionlint
 ```
 
