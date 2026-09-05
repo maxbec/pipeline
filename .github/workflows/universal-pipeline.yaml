@@ -1,86 +1,42 @@
 ---
-name: Navigaite CI/CD
-# Reusable workflow that provides a complete CI/CD pipeline for any tech stack
-# Call this workflow from your project's workflow file
+# The universal pipeline, slim (Flaiky Phase 10, D34 / D42). Three jobs:
+#
+#   Guard   parses .github/pipeline.yaml (v3) once for the other two jobs and,
+#           on a pull request, enforces the branch rules and a conventional
+#           title — Flaiky derives versions from PR titles, so a bad one must
+#           never merge.
+#   Check   static checks, tests and build in one job on the configured runner.
+#           `pipeline / Check` is the single required check-run everywhere; a
+#           failed Guard leaves it unreported, which blocks the PR.
+#   Deploy  only on a published GitHub release (ADR 0004): a prerelease deploys
+#           `preview`, a stable release deploys `production`, via OIDC. Pushes
+#           to dev or main never deploy. Flaiky publishes the release.
+#
+# Callers pin this file by SHA and forward their secrets explicitly — org
+# secrets do not cross the owner boundary. Behaviour is configured only through
+# the caller's .github/pipeline.yaml. The provider actions are taken from this
+# repository at the very same commit: inside a called workflow
+# `github.workflow_sha` is the reusable workflow's own SHA.
+name: Pipeline
 
 on:
   workflow_call:
     inputs:
       config-file:
-        description: Path to pipeline configuration file
-        required: false
+        description: Path to the pipeline configuration (version 3)
         type: string
+        required: false
         default: .github/pipeline.yaml
-
-      working-directory:
-        description: Working directory for all operations
-        required: false
-        type: string
-        default: .
-
-      # Override options (bypass config file)
-      stack:
-        description: Force specific tech stack (overrides config and auto-detection)
-        required: false
-        type: string
-        default: ''
-
-      skip-security:
-        description: Skip security scanning
-        required: false
-        type: boolean
-        default: false
-
-      skip-lint:
-        description: Skip linting
-        required: false
-        type: boolean
-        default: false
-
-      skip-test:
-        description: Skip tests
-        required: false
-        type: boolean
-        default: false
-
-      skip-build:
-        description: Skip build
-        required: false
-        type: boolean
-        default: false
-
-      skip-deploy:
-        description: Skip deployment
-        required: false
-        type: boolean
-        default: false
-
-    outputs:
-      release-created:
-        description: Whether a release was created
-        value: ${{ jobs.release.outputs.release-created }}
-      release-version:
-        description: Release version (without v prefix)
-        value: ${{ jobs.release.outputs.release-version }}
-      release-tag:
-        description: Release tag (with v prefix)
-        value: ${{ jobs.release.outputs.release-tag }}
-
     secrets:
-      # npm publish auth for @semantic-release/npm (release strategy: semantic-release)
-      NPM_TOKEN:
+      CF_ACCESS_CLIENT_ID:
+        description: Cloudflare Access service token id for the Infisical host
         required: false
-
-      # Vercel secrets
-      CLOUDFLARE_API_TOKEN:
-        description: |
-          Cloudflare API token with Workers Scripts:Edit on the target account
-          (deploy provider: cloudflare-workers)
+      CF_ACCESS_CLIENT_SECRET:
         required: false
-      CLOUDFLARE_ACCOUNT_ID:
-        description: |
-          Cloudflare account the Worker belongs to
-          (deploy provider: cloudflare-workers)
+      INFISICAL_CLIENT_ID:
+        description: Infisical Universal Auth; OIDC via vars.INFISICAL_IDENTITY_ID is preferred
+        required: false
+      INFISICAL_CLIENT_SECRET:
         required: false
       VERCEL_TOKEN:
         required: false
@@ -88,2040 +44,705 @@ on:
         required: false
       VERCEL_PROJECT_ID:
         required: false
-
-      # DigitalOcean secrets
-      DIGITALOCEAN_TOKEN:
+      CLOUDFLARE_API_TOKEN:
         required: false
-
-      # Docker registry secrets
-      DOCKER_REGISTRY_USERNAME:
+      CLOUDFLARE_ACCOUNT_ID:
         required: false
-      DOCKER_REGISTRY_PASSWORD:
+      RENDER_DEPLOY_HOOK:
+        description: Render deploy hook URL, fired after the production Docker deploy when deploy.render.hook is true
         required: false
-
-      # GitHub token (for deployments and release-please).
-      # Prefer passing WORKFLOW_APP_ID + WORKFLOW_APP_PRIVATE_KEY so the reusable
-      # workflow can mint an installation token in-job — release-please pushes
-      # authenticated with a cross-job-passed token are stripped by GitHub
-      # (masked outputs), which silently falls back to GITHUB_TOKEN and breaks
-      # downstream workflow triggering on release PRs.
-      GH_TOKEN:
+      NPM_TOKEN:
+        description: Only for packages without npm trusted publishing
         required: false
-
-      # GitHub App credentials for minting installation tokens in-job.
-      # When both are set, release + sync steps push with the app token so that
-      # downstream workflows (e.g. the pipeline itself on the release PR) fire.
-      WORKFLOW_APP_ID:
-        required: false
-      WORKFLOW_APP_PRIVATE_KEY:
-        required: false
-
-      # Infisical Universal Auth for loading secrets at build-time
-      INFISICAL_CLIENT_ID:
-        required: false
-      INFISICAL_CLIENT_SECRET:
-        required: false
-      # Infisical Machine Identity ID for OIDC auth (preferred over Universal Auth).
-      # Typically set via `vars.INFISICAL_IDENTITY_ID` since the identity ID is
-      # not sensitive, but declared as a secret here so the `vars || secrets`
-      # fallback expression type-checks under actionlint.
-      INFISICAL_IDENTITY_ID:
-        required: false
-      INFISICAL_PROJECT_SLUG:
-        required: false
-      INFISICAL_ENV_SLUG:
-        required: false
-      INFISICAL_DOMAIN:
-        required: false
-      INFISICAL_SECRET_PATH:
-        required: false
-      # Cloudflare Access service-token headers for self-hosted Infisical
-      # instances gated by CF Access (e.g. infisical.navigaite.de). Sent as
-      # extra headers on the Infisical action's login and secret-read
-      # requests; harmless when empty or when the domain has no Access gate.
-      CF_ACCESS_CLIENT_ID:
-        required: false
-      CF_ACCESS_CLIENT_SECRET:
-        required: false
-
-# NOTE: Calling workflows must grant the permissions each job actually uses:
-#   setup:     contents: read, pull-requests: read (PR Files API for docs-only detection)
-#   security:      contents: read, pull-requests: write
-#   static-checks: contents: read, pull-requests: write
-#     (optional: add `checks: write` in the caller to let trunk-action post
-#      check annotations — never request it in this reusable workflow, it would
-#      exceed the caller's grant and fail every run at startup)
-#   build:     contents: read, id-token: write, attestations: write
-#   deploy:    contents: read, deployments: write, pull-requests: write, packages: write, id-token: write
-#   release:   contents: write, pull-requests: write, id-token: write
-#   sync:      contents: write, pull-requests: write
-#   promotion-pr:         contents: write, pull-requests: write
-#   release-pr-automerge: contents: write, pull-requests: write
-permissions: {}
-
-concurrency:
-  group: ${{ github.repository }}-pipeline-${{ github.ref }}
-  # Preserve in-progress runs on `main` and `dev`. Cancelling a release-please
-  # push or a dev → main promotion mid-flight can leave release tags, GHCR
-  # images, and the sync-to-dev branch in inconsistent states. Repos without
-  # a `dev` branch are unaffected — no runs on dev exist to cancel.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 jobs:
-  # =============================================================================
-  # CONFIGURATION & SETUP
-  # =============================================================================
-  setup:
-    name: 🔧 Setup & Configuration
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 10
+  guard:
+    name: Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
-      pull-requests: read # for docs-only change detection via PR files API
+      pull-requests: read
     outputs:
-      # Change classification
-      docs-only: ${{ steps.docs-check.outputs.docs-only }}
-
-      # Delivery profile: 'major' (two-branch) or 'fast' (single-branch main)
-      profile: ${{ steps.parse-config.outputs.profile }}
-
-      # Tech stack detection
-      stack: ${{ steps.setup-env.outputs.detected-stack }}
-      runtime-version: ${{ steps.setup-env.outputs.runtime-version }}
-      package-manager: ${{ steps.setup-env.outputs.package-manager }}
-      enable-caching: ${{ steps.parse-config.outputs.enable-caching }}
-
-      # Runner targeting (self-hosted opt-in, defaults to ubuntu-latest)
-      runner-labels: ${{ steps.parse-config.outputs.runner-labels }}
-
-      # Pipeline configuration
-      enable-security: ${{ steps.parse-config.outputs.enable-security }}
-      enable-trufflehog: ${{ steps.parse-config.outputs.enable-trufflehog }}
-      enable-dependency-review: ${{ steps.parse-config.outputs.enable-dependency-review }}
-      security-fail-on-secrets: ${{ steps.parse-config.outputs.security-fail-on-secrets }}
-      security-fail-on-vulnerabilities: ${{ steps.parse-config.outputs.security-fail-on-vulnerabilities }}
-      enable-lint: ${{ steps.parse-config.outputs.enable-lint }}
-      lint-command: ${{ steps.parse-config.outputs.lint-command }}
-      lint-fail-on-error: ${{ steps.parse-config.outputs.lint-fail-on-error }}
-      enable-test: ${{ steps.parse-config.outputs.enable-test }}
-      test-command: ${{ steps.parse-config.outputs.test-command }}
-      test-coverage: ${{ steps.parse-config.outputs.test-coverage }}
-      enable-build: ${{ steps.parse-config.outputs.enable-build }}
-      build-command: ${{ steps.parse-config.outputs.build-command }}
-      build-upload-artifacts: ${{ steps.parse-config.outputs.build-upload-artifacts }}
-      build-artifact-name: ${{ steps.parse-config.outputs.build-artifact-name }}
-      build-artifact-path: ${{ steps.parse-config.outputs.build-artifact-path }}
-      build-attest-artifacts: ${{ steps.parse-config.outputs.build-attest-artifacts }}
-      build-artifact-retention-days: ${{ steps.parse-config.outputs.build-artifact-retention-days }}
-      enable-deploy: ${{ steps.parse-config.outputs.enable-deploy }}
-      enable-release: ${{ steps.parse-config.outputs.enable-release }}
-
-      # Deployment configuration
-      deploy-provider: ${{ steps.parse-config.outputs.deploy-provider }}
-      deploy-environments: ${{ steps.parse-config.outputs.deploy-environments }}
-      docker-images: ${{ steps.parse-config.outputs.docker-images }}
-      docker-cache-backend: ${{ steps.parse-config.outputs.docker-cache-backend }}
-      vercel-scope: ${{ steps.parse-config.outputs.vercel-scope }}
-      vercel-build-command: ${{ steps.parse-config.outputs.vercel-build-command }}
-      digitalocean-app-name: ${{ steps.parse-config.outputs.digitalocean-app-name }}
-      digitalocean-app-spec: ${{ steps.parse-config.outputs.digitalocean-app-spec }}
-      digitalocean-print-build-logs: ${{ steps.parse-config.outputs.digitalocean-print-build-logs }}
-      digitalocean-print-deploy-logs: ${{ steps.parse-config.outputs.digitalocean-print-deploy-logs }}
-      cloudflare-config: ${{ steps.parse-config.outputs.cloudflare-config }}
-      cloudflare-build-command: ${{ steps.parse-config.outputs.cloudflare-build-command }}
-
-      # Release configuration
-      enable-sync: ${{ steps.parse-config.outputs.enable-sync }}
-      sync-target-branch: ${{ steps.parse-config.outputs.sync-target-branch }}
-      auto-promotion-pr: ${{ steps.parse-config.outputs.auto-promotion-pr }}
-      auto-release-merge: ${{ steps.parse-config.outputs.auto-release-merge }}
-      release-strategy: ${{ steps.parse-config.outputs.release-strategy }}
-      release-type: ${{ steps.parse-config.outputs.release-type }}
-      release-force-patch-on-no-release: ${{ steps.parse-config.outputs.release-force-patch-on-no-release }}
-      release-extra-plugins: ${{ steps.parse-config.outputs.release-extra-plugins }}
-      prerelease-branches: ${{ steps.parse-config.outputs.prerelease-branches }}
-      # Whether the ref this run is on is one of them. The release job needs
-      # this in a job-level `if`, which cannot parse the JSON above.
-      is-prerelease-branch: ${{ steps.parse-config.outputs.is-prerelease-branch }}
-      release-config-file: ${{ steps.parse-config.outputs.release-config-file }}
-      release-config-file-stable: ${{ steps.parse-config.outputs.release-config-file-stable }}
-      release-manifest-file: ${{ steps.parse-config.outputs.release-manifest-file }}
-      release-manifest-file-stable: ${{ steps.parse-config.outputs.release-manifest-file-stable }}
-      release-manifest-file-resolved: ${{ steps.parse-config.outputs.release-manifest-file-resolved }}
-      release-draft-pull-request: ${{ steps.parse-config.outputs.release-draft-pull-request }}
-
+      stack: ${{ steps.config.outputs.stack }}
+      node-version: ${{ steps.config.outputs.node-version }}
+      package-manager: ${{ steps.config.outputs.package-manager }}
+      pnpm-version: ${{ steps.config.outputs.pnpm-version }}
+      cache: ${{ steps.config.outputs.cache }}
+      python-version: ${{ steps.config.outputs.python-version }}
+      runner: ${{ steps.config.outputs.runner }}
+      security: ${{ steps.config.outputs.security }}
+      trufflehog: ${{ steps.config.outputs.trufflehog }}
+      dependency-review: ${{ steps.config.outputs.dependency-review }}
+      fail-on-secrets: ${{ steps.config.outputs.fail-on-secrets }}
+      fail-on-vulnerabilities: ${{ steps.config.outputs.fail-on-vulnerabilities }}
+      lint: ${{ steps.config.outputs.lint }}
+      lint-command: ${{ steps.config.outputs.lint-command }}
+      test: ${{ steps.config.outputs.test }}
+      test-command: ${{ steps.config.outputs.test-command }}
+      build: ${{ steps.config.outputs.build }}
+      build-command: ${{ steps.config.outputs.build-command }}
+      artifact-path: ${{ steps.config.outputs.artifact-path }}
+      deploy-provider: ${{ steps.config.outputs.deploy-provider }}
+      deploy-targets: ${{ steps.config.outputs.deploy-targets }}
+      primary-target: ${{ steps.config.outputs.primary-target }}
+      vercel-scope: ${{ steps.config.outputs.vercel-scope }}
+      vercel-build-command: ${{ steps.config.outputs.vercel-build-command }}
+      cloudflare-config: ${{ steps.config.outputs.cloudflare-config }}
+      cloudflare-build-command: ${{ steps.config.outputs.cloudflare-build-command }}
+      docker-cache-backend: ${{ steps.config.outputs.docker-cache-backend }}
+      render-hook: ${{ steps.config.outputs.render-hook }}
     steps:
-      - name: 📥 Checkout code
+      - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # fetch-depth 2 lets the docs-only detector compare HEAD against
-          # its parent on push events. PR events use the Files API and
-          # don't need history.
-          fetch-depth: 2
+          sparse-checkout: |
+            ${{ inputs.config-file }}
+            package.json
+            .nvmrc
+            .node-version
+            pnpm-lock.yaml
+            yarn.lock
+            package-lock.json
+            pyproject.toml
+            requirements.txt
+          sparse-checkout-cone-mode: false
 
-      - name: 📋 Parse Configuration
-        id: parse-config
+      - name: Read pipeline.yaml
+        id: config
         shell: bash
         env:
           CONFIG_FILE: ${{ inputs.config-file }}
-          SKIP_SECURITY: ${{ inputs.skip-security }}
-          SKIP_LINT: ${{ inputs.skip-lint }}
-          SKIP_TEST: ${{ inputs.skip-test }}
-          SKIP_BUILD: ${{ inputs.skip-build }}
-          SKIP_DEPLOY: ${{ inputs.skip-deploy }}
+          PIPELINE_RUNNER: ${{ vars.PIPELINE_RUNNER }}
         run: |
           set -euo pipefail
-          echo "::group::📋 Parsing Pipeline Configuration"
-
-          # Check if config file exists
-          if [[ ! -f "$CONFIG_FILE" ]]; then
-            echo "::warning::Configuration file not found at $CONFIG_FILE, using defaults"
-
-            # Set sensible defaults
-            CONFIGURED_STACK="auto"
-            ENABLE_CACHING="true"
-            RUNNER_LABELS='["ubuntu-latest"]'
-            RUNTIME_NODE_VERSION=""
-            RUNTIME_PYTHON_VERSION=""
-            RUNTIME_FLUTTER_VERSION=""
-            ENABLE_SECURITY="true"
-            ENABLE_TRUFFLEHOG="true"
-            ENABLE_DEPENDENCY_REVIEW="true"
-            SECURITY_FAIL_ON_SECRETS="true"
-            SECURITY_FAIL_ON_VULNERABILITIES="false"
-            ENABLE_LINT="true"
-            LINT_COMMAND=""
-            LINT_FAIL_ON_ERROR="true"
-            ENABLE_TEST="true"
-            TEST_COMMAND=""
-            TEST_COVERAGE="false"
-            ENABLE_BUILD="true"
-            BUILD_COMMAND=""
-            BUILD_UPLOAD_ARTIFACTS="false"
-            BUILD_ARTIFACT_NAME="build-output"
-            BUILD_ARTIFACT_PATH=""
-            BUILD_ATTEST_ARTIFACTS="false"
-            BUILD_ARTIFACT_RETENTION_DAYS="7"
-            DEPLOY_PROVIDER="none"
-            ENABLE_DEPLOY="false"
-            DEPLOY_ENVS="[]"
-            DOCKER_IMAGES="[]"
-            VERCEL_SCOPE=""
-            VERCEL_BUILD_COMMAND=""
-            CLOUDFLARE_CONFIG="wrangler.jsonc"
-            CLOUDFLARE_BUILD_COMMAND=""
-            DIGITALOCEAN_APP_NAME=""
-            DIGITALOCEAN_APP_SPEC=".do/app.yaml"
-            DIGITALOCEAN_PRINT_BUILD_LOGS="true"
-            DIGITALOCEAN_PRINT_DEPLOY_LOGS="true"
-            ENABLE_RELEASE="false"
-            ENABLE_SYNC="true"
-            SYNC_TARGET="dev"
-            AUTO_PROMOTION_PR="true"
-            AUTO_RELEASE_MERGE=""
-            PROFILE="major"
-            RELEASE_STRATEGY="release-please"
-            RELEASE_TYPE=""
-            RELEASE_FORCE_PATCH_NO_RELEASE="false"
-            RELEASE_EXTRA_PLUGINS=""
-            PRERELEASE_BRANCHES="[]"
-            RP_CONFIG_FILE=""
-            RP_CONFIG_FILE_STABLE=""
-            RP_MANIFEST_FILE=""
-            RP_MANIFEST_FILE_STABLE=""
-            RP_DRAFT_PR="true"
-          else
-            echo "✓ Found configuration file: $CONFIG_FILE"
-
-            command -v yq >/dev/null || {
-              echo "::error::yq is required to parse $CONFIG_FILE"
-              exit 1
-            }
-            command -v jq >/dev/null || {
-              echo "::error::jq is required to parse $CONFIG_FILE"
-              exit 1
-            }
-
-            # yq/jq's `//` alternative operator substitutes its default on
-            # BOTH `null` and `false` — so `.security.enable // true` silently
-            # turns an explicit `enable: false` back into `true`. Boolean
-            # config keys must only fall back to their default when the key
-            # is genuinely absent (null), never when the owner wrote `false`.
-            yq_bool() {
-              local raw
-              raw=$(yq -r "$1" "$CONFIG_FILE")
-              if [[ "$raw" == "null" ]]; then
-                echo "$2"
-              else
-                echo "$raw"
-              fi
-            }
-
-            # Parse configuration using yq
-            PROFILE=$(yq -r '.profile // "major"' "$CONFIG_FILE")
-            if [[ "$PROFILE" != "major" && "$PROFILE" != "fast" ]]; then
-              echo "::error::Invalid profile '$PROFILE' in $CONFIG_FILE — must be 'major' or 'fast'."
-              exit 1
-            fi
-            CONFIGURED_STACK=$(yq -r '.stack // "auto"' "$CONFIG_FILE")
-            ENABLE_CACHING=$(yq_bool '.pipeline.enable_caching' true)
-            # Self-hosted opt-in. Labels are only meaningful if a runner is
-            # actually registered against THIS repo (runners are repo-scoped),
-            # so an unrelated repo setting these labels just queues forever —
-            # there is no cross-repo execution risk from this being a shared,
-            # public workflow file.
-            RUNNER_LABELS=$(yq -o=json -I=0 '.runner.labels // ["ubuntu-latest"]' "$CONFIG_FILE" | jq -c '.')
-            RUNTIME_NODE_VERSION=$(yq -r '.runtime.node_version // ""' "$CONFIG_FILE")
-            RUNTIME_PYTHON_VERSION=$(yq -r '.runtime.python_version // ""' "$CONFIG_FILE")
-            RUNTIME_FLUTTER_VERSION=$(yq -r '.runtime.flutter_version // ""' "$CONFIG_FILE")
-            ENABLE_SECURITY=$(yq_bool '.security.enable' true)
-            ENABLE_TRUFFLEHOG=$(yq_bool '.security.trufflehog' true)
-            ENABLE_DEPENDENCY_REVIEW=$(yq_bool '.security.dependency_review' true)
-            SECURITY_FAIL_ON_SECRETS=$(yq_bool '.security.fail_on_secrets' true)
-            SECURITY_FAIL_ON_VULNERABILITIES=$(yq_bool '.security.fail_on_vulnerabilities' false)
-            ENABLE_LINT=$(yq_bool '.lint.enable' true)
-            LINT_COMMAND=$(yq -r '.lint.command // ""' "$CONFIG_FILE")
-            LINT_FAIL_ON_ERROR=$(yq_bool '.lint.fail_on_error' true)
-            ENABLE_TEST=$(yq_bool '.test.enable' true)
-            TEST_COMMAND=$(yq -r '.test.command // ""' "$CONFIG_FILE")
-            TEST_COVERAGE=$(yq_bool '.test.coverage' false)
-            ENABLE_BUILD=$(yq_bool '.build.enable' true)
-            BUILD_COMMAND=$(yq -r '.build.command // ""' "$CONFIG_FILE")
-            BUILD_UPLOAD_ARTIFACTS=$(yq_bool '.build.upload_artifacts' false)
-            BUILD_ARTIFACT_NAME=$(yq -r '.build.artifact_name // "build-output"' "$CONFIG_FILE")
-            BUILD_ARTIFACT_PATH=$(yq -r '.build.artifact_path // ""' "$CONFIG_FILE")
-            BUILD_ATTEST_ARTIFACTS=$(yq_bool '.build.attest_artifacts' false)
-            BUILD_ARTIFACT_RETENTION_DAYS=$(yq -r '.build.artifact_retention_days // "7"' "$CONFIG_FILE")
-            DEPLOY_PROVIDER=$(yq '.deployment.provider // "none"' "$CONFIG_FILE")
-            ENABLE_DEPLOY=$([ "$DEPLOY_PROVIDER" != "none" ] && echo "true" || echo "false")
-            VERCEL_SCOPE=$(yq -r '.deployment.vercel.scope // ""' "$CONFIG_FILE")
-            VERCEL_BUILD_COMMAND=$(yq -r '.deployment.vercel.build_command // ""' "$CONFIG_FILE")
-            CLOUDFLARE_CONFIG=$(yq -r '.deployment.cloudflare.config // "wrangler.jsonc"' "$CONFIG_FILE")
-            # Empty means "deploy the tree as-is". The Worker action supplies the
-            # OpenNext default when this is unset, so a Next app needs no entry.
-            CLOUDFLARE_BUILD_COMMAND=$(yq -r '.deployment.cloudflare.build_command // ""' "$CONFIG_FILE")
-            DIGITALOCEAN_APP_NAME=$(yq -r '.deployment.digitalocean.app_name // ""' "$CONFIG_FILE")
-            DIGITALOCEAN_APP_SPEC=$(yq -r '.deployment.digitalocean.app_spec // ".do/app.yaml"' "$CONFIG_FILE")
-            DIGITALOCEAN_PRINT_BUILD_LOGS=$(yq_bool '.deployment.digitalocean.print_logs' true)
-            DIGITALOCEAN_PRINT_DEPLOY_LOGS="$DIGITALOCEAN_PRINT_BUILD_LOGS"
-            ENABLE_RELEASE=$(yq_bool '.release.enable' false)
-            RELEASE_STRATEGY=$(yq '.release.strategy // "release-please"' "$CONFIG_FILE")
-            RELEASE_TYPE=$(yq -r '.release.type // ""' "$CONFIG_FILE")
-            RELEASE_FORCE_PATCH_NO_RELEASE=$(yq -r '.release.force_patch_on_no_release // ""' "$CONFIG_FILE")
-            if [[ -z "$RELEASE_FORCE_PATCH_NO_RELEASE" || "$RELEASE_FORCE_PATCH_NO_RELEASE" == "null" ]]; then
-              if [[ "$RELEASE_STRATEGY" == "semantic-release" ]]; then
-                RELEASE_FORCE_PATCH_NO_RELEASE="true"
-              else
-                RELEASE_FORCE_PATCH_NO_RELEASE="false"
-              fi
-            fi
-
-            # Extract extra semantic-release plugins (newline-separated list)
-            RELEASE_EXTRA_PLUGINS=$(yq -r '(.release.extra_plugins // []) | join("\n")' "$CONFIG_FILE")
-
-            # Extract release sync configuration
-            ENABLE_SYNC=$(yq_bool '.release.sync_to_dev' true)
-            SYNC_TARGET=$(yq '.release.sync_target_branch // "dev"' "$CONFIG_FILE")
-
-            # One-button release flow. auto_promotion_pr keeps a dev → main
-            # promotion PR open/current whenever dev is ahead (default on; the
-            # job only runs on pushes to dev, so repos without dev never see
-            # it). auto_release_merge arms auto-merge on the stable
-            # release-please PR; empty means "use the default", which is
-            # FALSE — nothing merges into `main` without a human. Opt in
-            # explicitly if a repo genuinely wants hands-free releases.
-            AUTO_PROMOTION_PR=$(yq_bool '.release.auto_promotion_pr' true)
-            AUTO_RELEASE_MERGE=$(yq -r '.release.auto_release_merge // ""' "$CONFIG_FILE")
-
-            # Extract prerelease branch configuration
-            PRERELEASE_BRANCHES=$(yq -o=json -I=0 '.release.prerelease_branches // []' "$CONFIG_FILE" | jq -c '.')
-
-            # Extract release-please manifest config file paths
-            RP_CONFIG_FILE=$(yq -r '.release.config_file // ""' "$CONFIG_FILE")
-            RP_CONFIG_FILE_STABLE=$(yq -r '.release.config_file_stable // ""' "$CONFIG_FILE")
-            RP_MANIFEST_FILE=$(yq -r '.release.manifest_file // ""' "$CONFIG_FILE")
-            RP_MANIFEST_FILE_STABLE=$(yq -r '.release.manifest_file_stable // ""' "$CONFIG_FILE")
-
-            # Open release-please PRs in draft by default so the caller's
-            # full pipeline doesn't run on every merge to the release branch.
-            # Release PRs are human-gated: marking them ready re-triggers CI.
-            RP_DRAFT_PR=$(yq_bool '.release.draft_pull_request' true)
-
-            # Validate release strategy
-            if [[ "$RELEASE_STRATEGY" != "release-please" && "$RELEASE_STRATEGY" != "semantic-release" ]]; then
-              echo "::warning::Invalid release.strategy '$RELEASE_STRATEGY'. Falling back to 'release-please'"
-              RELEASE_STRATEGY="release-please"
-            fi
-
-            case "$DEPLOY_PROVIDER" in
-            vercel | cloudflare-workers | digitalocean | docker | none) ;;
-            *)
-              echo "::warning::Unsupported deployment.provider '$DEPLOY_PROVIDER'. Falling back to 'none'"
-              DEPLOY_PROVIDER="none"
-              ENABLE_DEPLOY="false"
-              ;;
+          out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
+          multi() { { echo "$1<<PIPELINE_EOF"; printf '%s\n' "$2"; echo "PIPELINE_EOF"; } >> "$GITHUB_OUTPUT"; }
+          str() { yq -r "$1 // \"$2\"" "$CONFIG_FILE"; }
+          # `//` would turn an explicit `false` into the default; read the raw value instead.
+          # bool <output> <yq path> <default> — writes the output itself so a bad value fails the step
+          # (an `exit` inside `$(...)` would only kill the subshell).
+          bool() {
+            local v; v=$(yq -r "$2" "$CONFIG_FILE")
+            if [[ "$v" == "null" ]]; then v="$3"; fi
+            case "$v" in
+              true|false) out "$1" "$v" ;;
+              *) echo "::error::$CONFIG_FILE: $2 must be true or false, got '$v'."; exit 1 ;;
             esac
+          }
 
-            # Extract deployment environments
-            DEPLOY_ENVS=$(yq -o=json '.deployment.environments // []' "$CONFIG_FILE")
-
-            # Filter environments by trigger event + branch (uses .trigger.event / .trigger.branch)
-            # Environments without a trigger field are always included
-            CURRENT_BRANCH="${GITHUB_REF#refs/heads/}"
-            DEPLOY_ENVS=$(echo "$DEPLOY_ENVS" | jq -c \
-              --arg event "$GITHUB_EVENT_NAME" \
-              --arg branch "$CURRENT_BRANCH" \
-              '[.[] | select(
-                .auto_deploy != false and
-                (.trigger == null or (
-                  .trigger.event == $event and
-                  (if .trigger.branch then .trigger.branch == $branch else true end) and
-                  (if .trigger.branches then (.trigger.branches | index($branch)) != null else true end)
-                ))
-              )]')
-
-            # Extract Docker image definitions for multi-image builds
-            DOCKER_IMAGES=$(yq -o=json -I=0 '.deployment.docker.images // []' "$CONFIG_FILE" | jq -c '.')
-            # Where the buildx layer cache lives. `gha` suits hosted runners;
-            # `local` keeps the export on the runner's own disk, which matters
-            # on self-hosted, where mode=max otherwise ships every intermediate
-            # layer over the WAN — measured at 438s of a 634s build on edilio.
-            DOCKER_CACHE_BACKEND=$(yq -r '.deployment.docker.cache_backend // "gha"' "$CONFIG_FILE")
-            if [[ "$DEPLOY_PROVIDER" == "docker" && "$DOCKER_IMAGES" == "[]" ]]; then
-              # Fallback: single image from repo name with default Dockerfile
-              DOCKER_IMAGES='[{"name":"default","dockerfile":"Dockerfile"}]'
-            fi
-
+          if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo "::error::No pipeline configuration at $CONFIG_FILE. Every repository on the pipeline carries one."
+            exit 1
+          fi
+          VERSION=$(str '.version' '')
+          if [[ "$VERSION" != "3" && "$VERSION" != "3.0" ]]; then
+            echo "::error::$CONFIG_FILE is version '${VERSION:-unset}'; this pipeline reads version 3 (deploy: instead of deployment:, no release: block). Run provisioning/migrate-repos.ts."
+            exit 1
+          fi
+          if [[ "$(yq -r 'has("deployment") or has("release") or has("pipeline")' "$CONFIG_FILE")" == "true" ]]; then
+            echo "::error::$CONFIG_FILE still has a v2 block (deployment/release/pipeline). Versioning and releases belong to Flaiky; deploys are configured under deploy:."
+            exit 1
           fi
 
-          # Apply input overrides
-          [[ "$SKIP_SECURITY" == "true" ]] && ENABLE_SECURITY="false"
-          [[ "$SKIP_LINT" == "true" ]] && ENABLE_LINT="false"
-          [[ "$SKIP_TEST" == "true" ]] && ENABLE_TEST="false"
-          [[ "$SKIP_BUILD" == "true" ]] && ENABLE_BUILD="false"
-          [[ "$SKIP_DEPLOY" == "true" ]] && ENABLE_DEPLOY="false"
-
-          # Fast profile: single-branch (main only), no dev branch. Force the
-          # main->dev back-merge off so the sync-to-dev job never tries to push
-          # to a dev branch that does not exist (which would hard-fail every
-          # stable release). This is enforced by profile, not left to the
-          # per-repo sync_to_dev flag, so a Fast repo cannot misconfigure it.
-          if [[ "$PROFILE" == "fast" ]]; then
-            ENABLE_SYNC="false"
+          # --- stack and toolchain -------------------------------------------
+          STACK=$(str '.stack' 'auto')
+          if [[ "$STACK" == "auto" ]]; then
+            if [[ -f package.json ]]; then STACK=nodejs
+            elif [[ -f pyproject.toml || -f requirements.txt ]]; then STACK=python
+            else STACK=none; fi
           fi
+          case "$STACK" in nodejs|python|none) ;; *) echo "::error::Unknown stack '$STACK'. Use nodejs, python or none."; exit 1;; esac
+          out stack "$STACK"
 
-          # Release contract drift. `.flama/delivery-contract.json` is the
-          # centrally generated statement of what a repo is supposed to do;
-          # `.github/pipeline.yaml` is what this workflow actually obeys. They
-          # are written by different systems and nothing reconciled them, so a
-          # repo could carry `release.enabled: true` in its contract and
-          # `release.enable: false` here and simply stop releasing. That is not
-          # hypothetical: maimaldrei-dispoplaner did exactly this from the
-          # NAV-20 migration (2026-07-26) until 2026-09-01 — no release, no
-          # failure, no annotation, nothing to notice.
-          #
-          # Asymmetric on purpose:
-          #   contract=true, pipeline=false -> fail. The failure mode is silence.
-          #   contract=false, pipeline=true -> warn. Releases visibly happen, so
-          #     a stale contract is self-evident; failing here would block repos
-          #     that ship correctly today (eslint-config, nvgt-website).
-          # Downgraded to a warning when the repo has no pipeline.yaml at all —
-          # that repo has not been migrated, which is a different problem.
-          CONTRACT_FILE=".flama/delivery-contract.json"
-          if [[ -f "$CONTRACT_FILE" ]]; then
-            # Not `// "absent"`: jq's alternative operator treats a literal
-            # `false` as empty, which would silently collapse the
-            # contract-says-no case into contract-says-nothing.
-            CONTRACT_RELEASE=$(jq -r '.release.enabled | if . == null then "absent" else tostring end' "$CONTRACT_FILE")
-            DRIFT_MSG="Flama contract says release.enabled=${CONTRACT_RELEASE} but .github/pipeline.yaml resolves release.enable=${ENABLE_RELEASE}"
-            if [[ "$CONTRACT_RELEASE" == "true" && "$ENABLE_RELEASE" != "true" ]]; then
-              if [[ -f "$CONFIG_FILE" ]]; then
-                echo "::error title=Release contract drift::${DRIFT_MSG}. This repo is configured to release but the pipeline will skip Release Management, so no version, tag or changelog will ever be produced. Set 'release.enable: true' in .github/pipeline.yaml, or correct the contract if this repo genuinely does not release."
-                exit 1
-              fi
-              echo "::warning title=Release contract drift::${DRIFT_MSG} (no .github/pipeline.yaml — repo not migrated to the universal pipeline)"
-            elif [[ "$CONTRACT_RELEASE" == "false" && "$ENABLE_RELEASE" == "true" ]]; then
-              echo "::warning title=Release contract drift::${DRIFT_MSG}. Releases are being produced against a contract that says this repo does not release — regenerate the contract."
+          NODE_VERSION=$(str '.runtime.node_version' '')
+          if [[ -z "$NODE_VERSION" ]]; then
+            if [[ -f .nvmrc ]]; then NODE_VERSION=$(tr -d '[:space:]v' < .nvmrc)
+            elif [[ -f .node-version ]]; then NODE_VERSION=$(tr -d '[:space:]v' < .node-version)
+            elif [[ -f package.json ]]; then NODE_VERSION=$(jq -r '.engines.node // ""' package.json | sed -E 's/^[^0-9]*//; s/[^0-9.].*$//')
             fi
           fi
+          out node-version "${NODE_VERSION:-lts/*}"
+          out python-version "$(str '.runtime.python_version' '3.12')"
 
-          # Resolve the branch-appropriate release-please manifest. On a
-          # non-prerelease branch (e.g. main) use the stable manifest when one
-          # is configured; otherwise the default manifest. Keeps the beta (dev)
-          # and stable (main) release streams in separate manifest files so
-          # dev<->main promotions never conflict on version state. Resolved
-          # once here so every consumer (release job + docker image tag) reads
-          # the same file.
-          RESOLVE_BRANCH="${GITHUB_REF#refs/heads/}"
-          RP_IS_PRERELEASE="false"
-          if [[ "$PRERELEASE_BRANCHES" != "[]" ]]; then
-            RP_LABEL=$(echo "$PRERELEASE_BRANCHES" | jq -r --arg b "$RESOLVE_BRANCH" '.[] | select(.branch == $b) | .label')
-            [[ -n "$RP_LABEL" ]] && RP_IS_PRERELEASE="true"
+          PM=""; CACHE=""
+          if [[ -f pnpm-lock.yaml ]]; then PM=pnpm; CACHE=pnpm
+          elif [[ -f yarn.lock ]]; then PM=yarn; CACHE=yarn
+          elif [[ -f package-lock.json ]]; then PM=npm; CACHE=npm
+          elif [[ -f package.json ]]; then PM=$(jq -r '.packageManager // "npm@"' package.json | cut -d@ -f1)
           fi
-          RP_MANIFEST_RESOLVED="$RP_MANIFEST_FILE"
-          if [[ "$RP_IS_PRERELEASE" == "false" && -n "$RP_MANIFEST_FILE_STABLE" ]]; then
-            RP_MANIFEST_RESOLVED="$RP_MANIFEST_FILE_STABLE"
+          out package-manager "${PM:-npm}"
+          out cache "$CACHE"
+          PNPM_VERSION=""
+          if [[ "$PM" == "pnpm" && "$(jq -r '.packageManager // ""' package.json 2>/dev/null)" != pnpm@* ]]; then PNPM_VERSION=latest; fi
+          out pnpm-version "$PNPM_VERSION"
+
+          RUNNER=$(yq -o=json -I=0 '.runner.labels // []' "$CONFIG_FILE" | jq -c '.')
+          if [[ "$RUNNER" == "[]" ]]; then
+            if [[ -n "${PIPELINE_RUNNER:-}" ]]; then RUNNER=$(jq -c '.' <<< "$PIPELINE_RUNNER"); else RUNNER='["ubuntu-latest"]'; fi
           fi
+          out runner "$RUNNER"
 
-          # Output configuration
-          echo "profile=$PROFILE" >> $GITHUB_OUTPUT
-          echo "configured-stack=$CONFIGURED_STACK" >> $GITHUB_OUTPUT
-          echo "enable-caching=$ENABLE_CACHING" >> $GITHUB_OUTPUT
-          echo "runner-labels=$RUNNER_LABELS" >> $GITHUB_OUTPUT
-          echo "runtime-node-version=$RUNTIME_NODE_VERSION" >> $GITHUB_OUTPUT
-          echo "runtime-python-version=$RUNTIME_PYTHON_VERSION" >> $GITHUB_OUTPUT
-          echo "runtime-flutter-version=$RUNTIME_FLUTTER_VERSION" >> $GITHUB_OUTPUT
-          echo "enable-security=$ENABLE_SECURITY" >> $GITHUB_OUTPUT
-          echo "enable-trufflehog=$ENABLE_TRUFFLEHOG" >> $GITHUB_OUTPUT
-          echo "enable-dependency-review=$ENABLE_DEPENDENCY_REVIEW" >> $GITHUB_OUTPUT
-          echo "security-fail-on-secrets=$SECURITY_FAIL_ON_SECRETS" >> $GITHUB_OUTPUT
-          echo "security-fail-on-vulnerabilities=$SECURITY_FAIL_ON_VULNERABILITIES" >> $GITHUB_OUTPUT
-          echo "enable-lint=$ENABLE_LINT" >> $GITHUB_OUTPUT
-          echo "lint-command<<LINT_EOF" >> $GITHUB_OUTPUT
-          echo "$LINT_COMMAND" >> $GITHUB_OUTPUT
-          echo "LINT_EOF" >> $GITHUB_OUTPUT
-          echo "lint-fail-on-error=$LINT_FAIL_ON_ERROR" >> $GITHUB_OUTPUT
-          echo "enable-test=$ENABLE_TEST" >> $GITHUB_OUTPUT
-          echo "test-command<<TEST_EOF" >> $GITHUB_OUTPUT
-          echo "$TEST_COMMAND" >> $GITHUB_OUTPUT
-          echo "TEST_EOF" >> $GITHUB_OUTPUT
-          echo "test-coverage=$TEST_COVERAGE" >> $GITHUB_OUTPUT
-          echo "enable-build=$ENABLE_BUILD" >> $GITHUB_OUTPUT
-          echo "build-command<<BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "$BUILD_COMMAND" >> $GITHUB_OUTPUT
-          echo "BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "build-upload-artifacts=$BUILD_UPLOAD_ARTIFACTS" >> $GITHUB_OUTPUT
-          echo "build-artifact-name=$BUILD_ARTIFACT_NAME" >> $GITHUB_OUTPUT
-          echo "build-artifact-path=$BUILD_ARTIFACT_PATH" >> $GITHUB_OUTPUT
-          echo "build-attest-artifacts=$BUILD_ATTEST_ARTIFACTS" >> $GITHUB_OUTPUT
-          echo "build-artifact-retention-days=$BUILD_ARTIFACT_RETENTION_DAYS" >> $GITHUB_OUTPUT
-          echo "enable-deploy=$ENABLE_DEPLOY" >> $GITHUB_OUTPUT
-          echo "enable-release=$ENABLE_RELEASE" >> $GITHUB_OUTPUT
-          echo "deploy-provider=$DEPLOY_PROVIDER" >> $GITHUB_OUTPUT
-          echo "deploy-environments=$DEPLOY_ENVS" >> $GITHUB_OUTPUT
-          echo "docker-images=$DOCKER_IMAGES" >> $GITHUB_OUTPUT
-          echo "docker-cache-backend=$DOCKER_CACHE_BACKEND" >> $GITHUB_OUTPUT
-          echo "vercel-scope=$VERCEL_SCOPE" >> $GITHUB_OUTPUT
-          echo "vercel-build-command<<VERCEL_BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "$VERCEL_BUILD_COMMAND" >> $GITHUB_OUTPUT
-          echo "VERCEL_BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "cloudflare-config=$CLOUDFLARE_CONFIG" >> $GITHUB_OUTPUT
-          # Delimited like the Vercel one: a build command may contain
-          # newlines, which a plain key=value line cannot carry.
-          echo "cloudflare-build-command<<CLOUDFLARE_BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "$CLOUDFLARE_BUILD_COMMAND" >> $GITHUB_OUTPUT
-          echo "CLOUDFLARE_BUILD_EOF" >> $GITHUB_OUTPUT
-          echo "digitalocean-app-name=$DIGITALOCEAN_APP_NAME" >> $GITHUB_OUTPUT
-          echo "digitalocean-app-spec=$DIGITALOCEAN_APP_SPEC" >> $GITHUB_OUTPUT
-          echo "digitalocean-print-build-logs=$DIGITALOCEAN_PRINT_BUILD_LOGS" >> $GITHUB_OUTPUT
-          echo "digitalocean-print-deploy-logs=$DIGITALOCEAN_PRINT_DEPLOY_LOGS" >> $GITHUB_OUTPUT
-          echo "enable-sync=$ENABLE_SYNC" >> $GITHUB_OUTPUT
-          echo "sync-target-branch=$SYNC_TARGET" >> $GITHUB_OUTPUT
-          echo "auto-promotion-pr=$AUTO_PROMOTION_PR" >> $GITHUB_OUTPUT
-          echo "auto-release-merge=$AUTO_RELEASE_MERGE" >> $GITHUB_OUTPUT
-          echo "release-strategy=$RELEASE_STRATEGY" >> $GITHUB_OUTPUT
-          echo "release-type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
-          echo "release-force-patch-on-no-release=$RELEASE_FORCE_PATCH_NO_RELEASE" >> $GITHUB_OUTPUT
-          echo "release-extra-plugins<<PLUGINS_EOF" >> $GITHUB_OUTPUT
-          echo "$RELEASE_EXTRA_PLUGINS" >> $GITHUB_OUTPUT
-          echo "PLUGINS_EOF" >> $GITHUB_OUTPUT
-          echo "prerelease-branches=$PRERELEASE_BRANCHES" >> $GITHUB_OUTPUT
-          IS_PRERELEASE_BRANCH=$(echo "$PRERELEASE_BRANCHES" \
-            | jq -r --arg b "$GITHUB_REF_NAME" 'any(.[]; .branch == $b)')
-          echo "is-prerelease-branch=$IS_PRERELEASE_BRANCH" >> $GITHUB_OUTPUT
-          echo "release-config-file=$RP_CONFIG_FILE" >> $GITHUB_OUTPUT
-          echo "release-config-file-stable=$RP_CONFIG_FILE_STABLE" >> $GITHUB_OUTPUT
-          echo "release-manifest-file=$RP_MANIFEST_FILE" >> $GITHUB_OUTPUT
-          echo "release-manifest-file-stable=$RP_MANIFEST_FILE_STABLE" >> $GITHUB_OUTPUT
-          echo "release-manifest-file-resolved=$RP_MANIFEST_RESOLVED" >> $GITHUB_OUTPUT
-          echo "release-draft-pull-request=$RP_DRAFT_PR" >> $GITHUB_OUTPUT
+          # --- check --------------------------------------------------------------
+          bool security '.security.enable' true
+          bool trufflehog '.security.trufflehog' true
+          bool dependency-review '.security.dependency_review' true
+          bool fail-on-secrets '.security.fail_on_secrets' true
+          bool fail-on-vulnerabilities '.security.fail_on_vulnerabilities' false
+          bool lint '.lint.enable' true
+          multi lint-command "$(str '.lint.command' '')"
+          bool test '.test.enable' true
+          multi test-command "$(str '.test.command' '')"
+          bool build '.build.enable' true
+          multi build-command "$(str '.build.command' '')"
+          out artifact-path "$(str '.build.artifact_path' '')"
 
-          echo ""
-          echo "📦 Configuration Summary:"
-          echo "  Profile: $PROFILE"
-          echo "  Stack: $CONFIGURED_STACK"
-          echo "  Caching: $ENABLE_CACHING"
-          echo "  Security: $ENABLE_SECURITY"
-          echo "  Lint: $ENABLE_LINT"
-          echo "  Test: $ENABLE_TEST"
-          echo "  Build: $ENABLE_BUILD"
-          echo "  Deploy: $ENABLE_DEPLOY (Provider: $DEPLOY_PROVIDER)"
-          echo "  Release: $ENABLE_RELEASE"
-          echo "  Release Strategy: $RELEASE_STRATEGY"
-          echo "  Release Fallback Patch: $RELEASE_FORCE_PATCH_NO_RELEASE"
+          # --- deploy -------------------------------------------------------------
+          PROVIDER=$(str '.deploy.provider' 'none')
+          case "$PROVIDER" in
+            none|vercel|cloudflare-workers|docker-ghcr|npm) ;;
+            *) echo "::error::Unknown deploy provider '$PROVIDER'. Supported: none, vercel, cloudflare-workers, docker-ghcr, npm."; exit 1;;
+          esac
+          out deploy-provider "$PROVIDER"
+          if [[ "$PROVIDER" == "docker-ghcr" ]]; then
+            TARGETS=$(yq -o=json -I=0 '.deploy.docker.images // []' "$CONFIG_FILE" | jq -c '.')
+            if [[ "$TARGETS" == "[]" ]]; then echo "::error::deploy.provider is docker-ghcr but deploy.docker.images is empty."; exit 1; fi
+          else
+            TARGETS='[{"name":"app"}]'
+          fi
+          out deploy-targets "$TARGETS"
+          out primary-target "$(jq -r '.[0].name' <<< "$TARGETS")"
+          out vercel-scope "$(str '.deploy.vercel.scope' '')"
+          multi vercel-build-command "$(str '.deploy.vercel.build_command' '')"
+          out cloudflare-config "$(str '.deploy.cloudflare.config' 'wrangler.toml')"
+          multi cloudflare-build-command "$(str '.deploy.cloudflare.build_command' '')"
+          out docker-cache-backend "$(str '.deploy.docker.cache_backend' 'gha')"
+          bool render-hook '.deploy.render.hook' false
+          echo "stack=$STACK runner=$RUNNER provider=$PROVIDER targets=$TARGETS"
 
-          echo "::endgroup::"
-
-      - name: 🔍 Setup Environment
-        id: setup-env
-        uses: maxbec/pipeline/.github/actions/setup-environment@v4
-        with:
-          stack: ${{ inputs.stack != '' && inputs.stack || steps.parse-config.outputs.configured-stack }}
-          node-version: ${{ steps.parse-config.outputs.runtime-node-version }}
-          python-version: ${{ steps.parse-config.outputs.runtime-python-version }}
-          flutter-version: ${{ steps.parse-config.outputs.runtime-flutter-version }}
-          working-directory: ${{ inputs.working-directory }}
-          write-summary: 'false'
-          enable-caching: 'false'
-
-      - name: 📄 Detect Docs-Only Changes
-        id: docs-check
+      - name: Does this repository have a dev branch?
+        id: dev
+        if: github.event_name == 'pull_request'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          PUSH_BEFORE: ${{ github.event.before }}
-          PUSH_AFTER: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # Resolve the list of changed files for both pull_request and push events.
-          # Skipping heavy jobs on docs-only changes saves Actions minutes; deploy
-          # remains independently gated by the caller's skip-deploy expression
-          # (typically only release-please commits), so a docs-only push to dev
-          # that *is* a release-please merge still deploys correctly.
-          CHANGED=""
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            CHANGED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' || true)
-          elif [[ "$EVENT_NAME" == "push" ]]; then
-            # First push to a new branch or force-push: github.event.before may be
-            # 0000…0000. Fall back to diffing against HEAD~1 (requires fetch-depth ≥ 2).
-            if [[ -z "$PUSH_BEFORE" || "$PUSH_BEFORE" == "0000000000000000000000000000000000000000" ]]; then
-              CHANGED=$(git diff --name-only "HEAD~1" "$PUSH_AFTER" 2>/dev/null || true)
-            else
-              CHANGED=$(git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER" 2>/dev/null || true)
-            fi
-          else
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "Event '$EVENT_NAME' — docs-only detection not applicable."
+          if gh api "repos/$REPO/branches/dev" --jq '.name' >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Branch and title rules
+        id: rules
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+          DEV_EXISTS: ${{ steps.dev.outputs.exists }}
+        run: |
+          set -euo pipefail
+          if [[ "${EVENT_NAME:-}" != "pull_request" ]]; then
+            echo "Not a pull request; nothing to guard."
             exit 0
           fi
-
-          if [[ -z "$CHANGED" ]]; then
-            echo "docs-only=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Could not list changed files — defaulting to full pipeline."
-            exit 0
+          # Conventional commit subject: type, optional scope, optional breaking bang.
+          # Squash merge makes this the commit subject Flaiky reads for the version (D45).
+          TITLE_RE='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^()]+\))?!?: [^ ].*$'
+          if [[ ! "$PR_TITLE" =~ $TITLE_RE ]]; then
+            echo "::error::PR title '$PR_TITLE' is not a conventional commit subject (type(scope)!: summary). Versions are derived from PR titles, so this cannot merge."
+            exit 1
           fi
-
-          echo "::group::Changed files ($EVENT_NAME)"
-          echo "$CHANGED"
-          echo "::endgroup::"
-
-          # A change-set is docs-only when *every* changed file matches one of these
-          # patterns. Adding a new pattern? Remember: code that silently depends on
-          # markdown at runtime (e.g. loaded content) will be under-tested by a
-          # docs-only skip.
-          DOCS_ONLY=true
-          NON_DOC_FILE=""
-          while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            case "$file" in
-              *.md|*.mdx) ;;
-              LICENSE|LICENSE.*|*/LICENSE|*/LICENSE.*) ;;
-              docs/*|*/docs/*)
-                # A file merely living under a docs/ directory is NOT enough to
-                # treat the change-set as docs-only: code such as docs/deploy.sh
-                # or src/docs/loader.ts must still run the full pipeline. Only
-                # count files under docs/ that carry a documentation extension.
-                case "$file" in
-                  *.md|*.mdx|*.txt|*.rst|*.adoc|*.png|*.jpg|*.jpeg|*.gif|*.svg|*.webp) ;;
-                  *) DOCS_ONLY=false; NON_DOC_FILE="$file"; break ;;
-                esac
-                ;;
-              *) DOCS_ONLY=false; NON_DOC_FILE="$file"; break ;;
-            esac
-          done <<< "$CHANGED"
-
-          echo "docs-only=$DOCS_ONLY" >> "$GITHUB_OUTPUT"
-          if [[ "$DOCS_ONLY" == "true" ]]; then
-            echo "::notice::Only docs/LICENSE changes detected — security, lint, test, build will be skipped."
-          else
-            echo "Non-docs file detected: $NON_DOC_FILE — running full pipeline."
-          fi
-
-      - name: 📊 Pipeline Summary
-        shell: bash
-        env:
-          STACK: ${{ steps.setup-env.outputs.detected-stack }}
-          RUNTIME_VERSION: ${{ steps.setup-env.outputs.runtime-version }}
-          PKG_MANAGER: ${{ steps.setup-env.outputs.package-manager }}
-          ENABLE_SECURITY: ${{ steps.parse-config.outputs.enable-security }}
-          ENABLE_LINT: ${{ steps.parse-config.outputs.enable-lint }}
-          ENABLE_TEST: ${{ steps.parse-config.outputs.enable-test }}
-          ENABLE_BUILD: ${{ steps.parse-config.outputs.enable-build }}
-          ENABLE_DEPLOY: ${{ steps.parse-config.outputs.enable-deploy }}
-          ENABLE_RELEASE: ${{ steps.parse-config.outputs.enable-release }}
-          RELEASE_STRATEGY: ${{ steps.parse-config.outputs.release-strategy }}
-          RELEASE_FORCE_PATCH_NO_RELEASE: ${{ steps.parse-config.outputs.release-force-patch-on-no-release }}
-          DOCS_ONLY: ${{ steps.docs-check.outputs.docs-only }}
-        run: |
-          set -euo pipefail
-          # On docs-only PRs, security/lint/test/build/deploy all skip even
-          # when enabled in config. Release + sync still fire on push events
-          # (docs-only detection only applies to pull_request events).
-          docs_skip_note=""
-          if [[ "$DOCS_ONLY" == "true" ]]; then
-            docs_skip_note=" (docs-only PR)"
-          fi
-          status_stage() {
-            local enabled="$1"
-            if [[ "$enabled" != "true" ]]; then
-              echo "⏭️ Skipped"
-            elif [[ "$DOCS_ONLY" == "true" ]]; then
-              echo "⏭️ Skipped${docs_skip_note}"
-            else
-              echo "✅ Enabled"
+          if [[ "$PR_BASE" == "main" ]]; then
+            if [[ "$PR_HEAD_REPO" != "$BASE_REPO" ]]; then
+              echo "::error::Fork pull requests cannot target main."
+              exit 1
             fi
-          }
-          SECURITY=$(status_stage "$ENABLE_SECURITY")
-          LINT=$(status_stage "$ENABLE_LINT")
-          TEST=$(status_stage "$ENABLE_TEST")
-          BUILD=$(status_stage "$ENABLE_BUILD")
-          DEPLOY=$(status_stage "$ENABLE_DEPLOY")
-          RELEASE=$([[ "$ENABLE_RELEASE" == "true" ]] && echo "✅ Enabled" || echo "⏭️ Skipped")
-
-          {
-            echo "## 🚀 Pipeline Overview"
-            echo ""
-            echo "| | |"
-            echo "|:---|:---|"
-            echo "| **Stack** | \`$STACK\` |"
-            echo "| **Runtime** | \`$RUNTIME_VERSION\` |"
-            echo "| **Package Manager** | \`$PKG_MANAGER\` |"
-            if [[ "$ENABLE_RELEASE" == "true" ]]; then
-              echo "| **Release Strategy** | \`$RELEASE_STRATEGY\` |"
-              echo "| **Force Patch on No Release** | \`$RELEASE_FORCE_PATCH_NO_RELEASE\` |"
-            fi
-            echo ""
-            echo "---"
-            echo ""
-            echo "| Stage | Status |"
-            echo "|:---|:---|"
-            echo "| 🔒 Security Scan | $SECURITY |"
-            echo "| 🧹 Lint | $LINT |"
-            echo "| 🧪 Test | $TEST |"
-            echo "| 🏗️ Build | $BUILD |"
-            echo "| 🚀 Deploy | $DEPLOY |"
-            echo "| 📦 Release | $RELEASE |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # =============================================================================
-  # STATIC CHECKS — security scan + lint merged onto one runner to cut per-job
-  # minute-rounding overhead (EDI-375). The job-level `if:` fires when *either*
-  # is enabled, so every step below carries its own enable-security /
-  # enable-lint guard (the old job-level `if:` no longer covers them).
-  # =============================================================================
-  static-checks:
-    name: 🔎 Static Checks
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner-labels) }}
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      pull-requests: write
-      # NOTE: do NOT request `checks: write` here. A reusable workflow job may
-      # only request permissions the CALLER already grants; every consumer
-      # caller sets an explicit `permissions:` block that omits `checks`, so
-      # requesting `checks: write` makes GitHub reject the whole run at load
-      # time (startup_failure) for every repo. trunk-action degrades gracefully
-      # without it — it just logs "Failed to post annotations to github: 403"
-      # and lint still runs and gates correctly. A repo that wants the check
-      # annotations opts in by adding `checks: write` to its own caller.
-    needs: setup
-    if: |
-      (needs.setup.outputs.enable-security == 'true' || needs.setup.outputs.enable-lint == 'true') &&
-      needs.setup.outputs.docs-only != 'true'
-    steps:
-      # Hardened rootless self-hosted runners mount /tmp noexec, so tools that
-      # mktemp+exec (the trunk launcher extracts+runs the CLI from its mktemp
-      # dir; prebuilt native binaries do the same) fail with exit 126. Route tmp
-      # to the exec-capable runner workdir for every later step. Setting
-      # TRUNK_TMPDIR is not enough: trunk-action's setup/locate_trunk.sh does its
-      # own `mktemp -d` (honoring TMPDIR) and overwrites TRUNK_TMPDIR afterwards.
-      # No-op on GitHub-hosted runners, where RUNNER_TEMP is already exec-capable.
-      - name: 🧭 Route tmp to exec-capable runner workdir
-        shell: bash
-        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # Required for TruffleHog (security scan)
-
-      - name: 🔍 Security Scanning
-        if: needs.setup.outputs.enable-security == 'true'
-        uses: maxbec/pipeline/.github/actions/security-scan@v4
-        with:
-          enable-trufflehog: ${{ needs.setup.outputs.enable-trufflehog }}
-          enable-dependency-review: ${{ needs.setup.outputs.enable-dependency-review }}
-          fail-on-secrets: ${{ needs.setup.outputs.security-fail-on-secrets }}
-          fail-on-vulnerabilities: ${{ needs.setup.outputs.security-fail-on-vulnerabilities }}
-
-      # --- Lint (shares this runner with security; each step guarded) ---
-      - name: 🔧 Setup Environment
-        if: needs.setup.outputs.enable-lint == 'true'
-        uses: maxbec/pipeline/.github/actions/setup-environment@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          node-version: ${{ needs.setup.outputs.runtime-version }}
-          python-version: ${{ needs.setup.outputs.runtime-version }}
-          flutter-version: ${{ needs.setup.outputs.runtime-version }}
-          working-directory: ${{ inputs.working-directory }}
-          write-summary: 'false'
-          enable-caching: ${{ needs.setup.outputs.enable-caching }}
-
-      - name: 📦 Install Dependencies
-        if: needs.setup.outputs.enable-lint == 'true'
-        uses: maxbec/pipeline/.github/actions/install-dependencies@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          package-manager: ${{ needs.setup.outputs.package-manager }}
-          working-directory: ${{ inputs.working-directory }}
-          write-summary: 'false'
-
-      - name: 🔍 Detect React Project
-        id: detect-react
-        if: needs.setup.outputs.enable-lint == 'true' && needs.setup.outputs.stack == 'nodejs'
-        shell: bash
-        working-directory: ${{ inputs.working-directory }}
-        run: |
-          set -euo pipefail
-          if [[ ! -f package.json ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          HAS_REACT=$(jq -r '((.dependencies // {}) + (.devDependencies // {}) + (.peerDependencies // {})) | has("react")' package.json)
-          if [[ "$HAS_REACT" == "true" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "✓ React project detected"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "ℹ️ Not a React project, skipping React Doctor"
-          fi
-
-      - name: 🩺 Run React Doctor (PR)
-        id: react-doctor-pr
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-react.outputs.enabled == 'true' && github.event_name == 'pull_request'
-        uses: millionco/react-doctor@b31fd85b9ee469c6b588d4e446f44385466193a2 # main
-        continue-on-error: true
-        with:
-          directory: ${{ inputs.working-directory }}
-          diff: ${{ github.base_ref || 'main' }}
-          fail-on: none
-          verbose: 'false'
-
-      - name: 🩺 Run React Doctor
-        id: react-doctor
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-react.outputs.enabled == 'true' && github.event_name != 'pull_request'
-        uses: millionco/react-doctor@b31fd85b9ee469c6b588d4e446f44385466193a2 # main
-        continue-on-error: true
-        with:
-          directory: ${{ inputs.working-directory }}
-          fail-on: none
-          verbose: 'false'
-
-      - name: 🔍 Detect Trunk Configuration
-        id: detect-trunk
-        if: needs.setup.outputs.enable-lint == 'true'
-        shell: bash
-        working-directory: ${{ inputs.working-directory }}
-        run: |
-          set -euo pipefail
-          if [[ -f ".trunk/trunk.yaml" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🩺 React Doctor Summary
-        if: always() && needs.setup.outputs.enable-lint == 'true' && steps.detect-react.outputs.enabled == 'true'
-        shell: bash
-        env:
-          PR_OUTCOME: ${{ steps.react-doctor-pr.outcome }}
-          PR_SCORE: ${{ steps.react-doctor-pr.outputs.score }}
-          BRANCH_OUTCOME: ${{ steps.react-doctor.outcome }}
-          BRANCH_SCORE: ${{ steps.react-doctor.outputs.score }}
-        run: |
-          set -euo pipefail
-          MODE="not run"
-          OUTCOME="skipped"
-          SCORE="-"
-
-          if [[ -n "$PR_OUTCOME" && "$PR_OUTCOME" != "skipped" ]]; then
-            MODE="PR diff scan"
-            OUTCOME="$PR_OUTCOME"
-            [[ -n "$PR_SCORE" ]] && SCORE="$PR_SCORE"
-          elif [[ -n "$BRANCH_OUTCOME" && "$BRANCH_OUTCOME" != "skipped" ]]; then
-            MODE="full scan"
-            OUTCOME="$BRANCH_OUTCOME"
-            [[ -n "$BRANCH_SCORE" ]] && SCORE="$BRANCH_SCORE"
-          fi
-
-          STATUS="⏭️ Skipped"
-          if [[ "$OUTCOME" == "success" ]]; then
-            STATUS="✅ Passed"
-          elif [[ "$OUTCOME" == "failure" ]]; then
-            STATUS="⚠️ Completed with findings (non-blocking)"
-          elif [[ "$OUTCOME" == "cancelled" ]]; then
-            STATUS="⚪ Cancelled"
-          fi
-
-          {
-            echo "### 🩺 React Doctor"
-            echo ""
-            echo "| | |"
-            echo "|:---|:---|"
-            echo "| **Status** | $STATUS |"
-            echo "| **Mode** | $MODE |"
-            echo "| **Health Score** | \`$SCORE\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 🧹 Run Trunk Lint
-        id: trunk-lint
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-trunk.outputs.enabled == 'true' && inputs.working-directory == '.'
-        uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
-
-      - name: 📥 Install Trunk CLI (Subdirectory)
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-trunk.outputs.enabled == 'true' && inputs.working-directory != '.'
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL https://trunk.io/releases/trunk -o "$RUNNER_TEMP/trunk"
-          chmod +x "$RUNNER_TEMP/trunk"
-
-      - name: 🧹 Run Trunk Lint (Subdirectory)
-        id: trunk-lint-subdir
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-trunk.outputs.enabled == 'true' && inputs.working-directory != '.'
-        shell: bash
-        working-directory: ${{ inputs.working-directory }}
-        env:
-          TRUNK_PATH: ${{ runner.temp }}/trunk
-        run: |
-          set -euo pipefail
-          "$TRUNK_PATH" check --ci
-
-      - name: 🧹 Run Lint
-        id: fallback-lint
-        if: needs.setup.outputs.enable-lint == 'true' && steps.detect-trunk.outputs.enabled != 'true'
-        uses: maxbec/pipeline/.github/actions/run-lint@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          lint-command: ${{ needs.setup.outputs.lint-command }}
-          working-directory: ${{ inputs.working-directory }}
-          fail-on-error: ${{ needs.setup.outputs.lint-fail-on-error }}
-
-      - name: 📋 Lint Summary
-        if: always() && needs.setup.outputs.enable-lint == 'true'
-        shell: bash
-        env:
-          TRUNK_ENABLED: ${{ steps.detect-trunk.outputs.enabled }}
-          TRUNK_OUTCOME: ${{ steps.trunk-lint.outcome }}
-          TRUNK_SUBDIR_OUTCOME: ${{ steps.trunk-lint-subdir.outcome }}
-          FALLBACK_OUTCOME: ${{ steps.fallback-lint.outcome }}
-          REACT_ENABLED: ${{ steps.detect-react.outputs.enabled }}
-          RD_PR_OUTCOME: ${{ steps.react-doctor-pr.outcome }}
-          RD_OUTCOME: ${{ steps.react-doctor.outcome }}
-        run: |
-          set -euo pipefail
-          LINT_ENGINE="Custom lint action"
-          LINT_STATUS="$FALLBACK_OUTCOME"
-          if [[ "$TRUNK_ENABLED" == "true" ]]; then
-            LINT_ENGINE="Trunk"
-            LINT_STATUS="$TRUNK_OUTCOME"
-            if [[ -n "$TRUNK_SUBDIR_OUTCOME" && "$TRUNK_SUBDIR_OUTCOME" != "skipped" ]]; then
-              LINT_ENGINE="Trunk (subdirectory)"
-              LINT_STATUS="$TRUNK_SUBDIR_OUTCOME"
+            if [[ "$DEV_EXISTS" == "true" ]]; then
+              case "$PR_HEAD" in
+                dev|promote/*|hotfix/*|release/*) ;;
+                *)
+                  echo "::error::PRs into main must come from dev, promote/*, hotfix/* or release/* — feature work targets dev."
+                  exit 1
+                  ;;
+              esac
             fi
           fi
+          echo "✅ '$PR_TITLE' from $PR_HEAD into $PR_BASE is allowed"
 
-          RD_STATUS="not run"
-          if [[ "$REACT_ENABLED" == "true" ]]; then
-            if [[ -n "$RD_PR_OUTCOME" && "$RD_PR_OUTCOME" != "skipped" ]]; then
-              RD_STATUS="$RD_PR_OUTCOME"
-            elif [[ -n "$RD_OUTCOME" && "$RD_OUTCOME" != "skipped" ]]; then
-              RD_STATUS="$RD_OUTCOME"
-            else
-              RD_STATUS="skipped"
-            fi
-          fi
-
-          STATUS_ICON="⏭️"
-          STATUS_LABEL="Skipped"
-          if [[ "$LINT_STATUS" == "success" ]]; then
-            STATUS_ICON="✅"; STATUS_LABEL="Passed"
-          elif [[ "$LINT_STATUS" == "failure" ]]; then
-            STATUS_ICON="❌"; STATUS_LABEL="Failed"
-          fi
-
-          case "$RD_STATUS" in
-            success) RD_DISPLAY="✅ Passed" ;;
-            failure) RD_DISPLAY="⚠️ Completed with findings" ;;
-            "not run") RD_DISPLAY="⏭️ Not a React project" ;;
-            skipped|"") RD_DISPLAY="⏭️ Skipped" ;;
-            *) RD_DISPLAY="$RD_STATUS" ;;
-          esac
-
-          {
-            echo "### 🧹 Lint"
-            echo ""
-            echo "| | |"
-            echo "|:---|:---|"
-            echo "| **Status** | $STATUS_ICON $STATUS_LABEL |"
-            echo "| **Engine** | \`$LINT_ENGINE\` |"
-            echo "| **React Doctor** | $RD_DISPLAY |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # =============================================================================
-  # VERIFY — test + build merged onto one runner (EDI-375). setup-env + install
-  # run ONCE, then tests, then build. Build steps skip automatically when tests
-  # fail (sequential steps, no continue-on-error) — an intentional minute
-  # saving. perms are the union of the old test + build jobs.
-  # =============================================================================
-  verify:
-    name: 🧪 Verify
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner-labels) }}
+  check:
+    name: Check
+    needs: guard
+    if: github.event_name != 'release'
+    runs-on: ${{ fromJSON(needs.guard.outputs.runner) }}
     timeout-minutes: 45
     permissions:
       contents: read
-      id-token: write # SLSA attestation + OIDC (build)
-      attestations: write # SLSA build provenance (build)
-    needs: [setup]
-    if: |
-      (needs.setup.outputs.enable-test == 'true' || needs.setup.outputs.enable-build == 'true') &&
-      needs.setup.outputs.docs-only != 'true'
+      pull-requests: read
+      checks: write # trunk posts lint annotations through the Checks API
+      id-token: write # Infisical OIDC for build-time secrets
+    env:
+      STACK: ${{ needs.guard.outputs.stack }}
+      PM: ${{ needs.guard.outputs.package-manager }}
     steps:
-      # /tmp is noexec on hardened rootless runners; tests/builds exec prebuilt
-      # binaries from a tmp dir (esbuild, swc, native modules). Route tmp to the
-      # exec-capable runner workdir. See static-checks for the full rationale.
-      # No-op on GitHub-hosted runners, where RUNNER_TEMP is already exec-capable.
-      - name: 🧭 Route tmp to exec-capable runner workdir
+      # /tmp is noexec on the hardened rootless homelab runners; tooling that
+      # mktemp+execs (esbuild, swc, native modules) needs an exec-capable tmp.
+      # No-op on GitHub-hosted runners.
+      - name: Route tmp to the runner workdir
         shell: bash
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
-      - name: 📥 Checkout code
+      - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🔧 Setup Environment
-        uses: maxbec/pipeline/.github/actions/setup-environment@v4
         with:
-          stack: ${{ needs.setup.outputs.stack }}
-          node-version: ${{ needs.setup.outputs.runtime-version }}
-          python-version: ${{ needs.setup.outputs.runtime-version }}
-          flutter-version: ${{ needs.setup.outputs.runtime-version }}
-          working-directory: ${{ inputs.working-directory }}
-          write-summary: 'false'
-          enable-caching: ${{ needs.setup.outputs.enable-caching }}
+          fetch-depth: 0 # trufflehog scans the commit range
 
-      - name: 📦 Install Dependencies
-        uses: maxbec/pipeline/.github/actions/install-dependencies@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          package-manager: ${{ needs.setup.outputs.package-manager }}
-          working-directory: ${{ inputs.working-directory }}
-          write-summary: 'false'
-
-      - name: 🧪 Run Tests
-        if: needs.setup.outputs.enable-test == 'true'
-        uses: maxbec/pipeline/.github/actions/run-tests@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          test-command: ${{ needs.setup.outputs.test-command }}
-          working-directory: ${{ inputs.working-directory }}
-          coverage: ${{ needs.setup.outputs.test-coverage }}
-
-      # --- Build (runs after tests; skipped automatically if tests failed) ---
-      - name: 🔍 Check Infisical Configuration
-        id: infisical-config
-        if: needs.setup.outputs.enable-build == 'true'
+      # TruffleHog runs as the pinned binary, not the container action: the
+      # homelab runners are rootless with no Docker socket.
+      - name: Secret scan
+        if: needs.guard.outputs.security == 'true' && needs.guard.outputs.trufflehog == 'true'
         shell: bash
         env:
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_SLUG: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
-          INFISICAL_ENV_SLUG: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
-          INFISICAL_DOMAIN: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          TRUFFLEHOG_VERSION: v3.93.4
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          COMMIT_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          FAIL_ON_SECRETS: ${{ needs.guard.outputs.fail-on-secrets }}
         run: |
           set -euo pipefail
-          if [[ -z "$INFISICAL_PROJECT_SLUG" || -z "$INFISICAL_ENV_SLUG" ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Infisical project/env slug missing, skipping secrets injection step"
-            exit 0
+          ZERO_SHA=0000000000000000000000000000000000000000
+          BIN_DIR="${RUNNER_TEMP}/trufflehog-bin"
+          mkdir -p "$BIN_DIR"
+          curl -sSfL "https://raw.githubusercontent.com/trufflesecurity/trufflehog/${TRUFFLEHOG_VERSION}/scripts/install.sh" \
+            | sh -s -- -b "$BIN_DIR" "${TRUFFLEHOG_VERSION}"
+          ARGS=(git "file://${GITHUB_WORKSPACE}" --no-update --fail --only-verified)
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            ARGS+=(--since-commit "$PR_BASE_SHA" --branch "$PR_HEAD_SHA")
+          elif [[ "$EVENT_NAME" == "push" && ( "$PUSH_BEFORE" == "$COMMIT_SHA" || "$PUSH_BEFORE" == "$ZERO_SHA" ) ]]; then
+            ARGS+=(--since-commit "HEAD~10")
+          else
+            ARGS+=(--since-commit "$PUSH_BEFORE" --branch "$COMMIT_SHA")
           fi
-          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then
-            method=oidc
-          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then
-            method=universal
+          set +e
+          "$BIN_DIR/trufflehog" "${ARGS[@]}"
+          CODE=$?
+          set -e
+          if [[ "$CODE" -eq 0 ]]; then echo "✅ No verified secrets"; exit 0; fi
+          if [[ "$CODE" -eq 183 ]]; then
+            if [[ "$FAIL_ON_SECRETS" == "true" ]]; then echo "::error::TruffleHog found verified secrets. Remove them and rotate."; exit 1; fi
+            echo "::warning::TruffleHog found verified secrets (fail_on_secrets is off)."; exit 0
+          fi
+          echo "::error::TruffleHog exited $CODE"; exit "$CODE"
+
+      # The dependency graph API needs a public repository or GHAS; private
+      # repositories without it get a notice instead of a red Check.
+      - name: Is the dependency graph available?
+        id: depgraph
+        if: |
+          needs.guard.outputs.security == 'true' && needs.guard.outputs.dependency-review == 'true' &&
+          github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Visibility is not a proxy: a public repository can have the graph switched off and a
+        # private one can have it through GHAS. The SBOM endpoint answers 200 only when it is on.
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Dependency review
+        if: steps.depgraph.outputs.available == 'true'
+        uses: actions/dependency-review-action@9129d7d40b8c12c1ed0f60400d00c92d437adcce # v4.1.3
+        with:
+          fail-on-severity: ${{ needs.guard.outputs.fail-on-vulnerabilities == 'true' && 'moderate' || 'critical' }}
+          warn-only: ${{ needs.guard.outputs.fail-on-vulnerabilities != 'true' }}
+          comment-summary-in-pr: never
+      - name: Dependency review unavailable
+        if: steps.depgraph.outcome == 'success' && steps.depgraph.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::notice::Dependency review skipped: this repository has no dependency graph (enable it under Settings > Security, or GHAS for private repositories)."
+
+      - name: Set up pnpm (from packageManager)
+        if: env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - name: Set up pnpm (latest)
+        if: env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ needs.guard.outputs.pnpm-version }}
+      - name: Set up Node.js
+        if: env.STACK == 'nodejs'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ needs.guard.outputs.node-version }}
+          cache: ${{ needs.guard.outputs.cache }}
+      - name: Set up Python
+        if: env.STACK == 'python'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ needs.guard.outputs.python-version }}
+
+      - name: Install dependencies
+        if: env.STACK != 'none'
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$STACK" in
+            nodejs)
+              case "$PM" in
+                pnpm) pnpm install --frozen-lockfile ;;
+                yarn) yarn install --frozen-lockfile ;;
+                npm) if [[ -f package-lock.json ]]; then npm ci; else npm install; fi ;;
+                *) echo "::error::Unknown package manager '$PM'"; exit 1 ;;
+              esac ;;
+            python)
+              python -m pip install --upgrade pip
+              if [[ -f requirements.txt ]]; then pip install -r requirements.txt; fi
+              if [[ -f requirements-dev.txt ]]; then pip install -r requirements-dev.txt; fi
+              if [[ -f pyproject.toml && ! -f requirements.txt ]]; then pip install -e ".[dev]" 2>/dev/null || pip install -e .; fi ;;
+          esac
+
+      - name: Which linter?
+        id: linter
+        if: needs.guard.outputs.lint == 'true'
+        shell: bash
+        env:
+          LINT_COMMAND: ${{ needs.guard.outputs.lint-command }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$LINT_COMMAND" && -f .trunk/trunk.yaml ]]; then echo "trunk=true" >> "$GITHUB_OUTPUT"; else echo "trunk=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Lint (trunk)
+        if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
+        uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
+      - name: Lint
+        if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk != 'true'
+        shell: bash
+        env:
+          LINT_COMMAND: ${{ needs.guard.outputs.lint-command }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$LINT_COMMAND" ]]; then bash -eo pipefail -c "$LINT_COMMAND"
+          elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.lint' package.json >/dev/null; then "$PM" run lint
+          elif [[ "$STACK" == "python" ]] && command -v ruff >/dev/null; then ruff check .
+          else echo "::notice::No lint command configured and none detected; skipped."; fi
+
+      - name: Test
+        if: needs.guard.outputs.test == 'true'
+        shell: bash
+        env:
+          TEST_COMMAND: ${{ needs.guard.outputs.test-command }}
+          CI: 'true'
+        run: |
+          set -euo pipefail
+          if [[ -n "$TEST_COMMAND" ]]; then bash -eo pipefail -c "$TEST_COMMAND"
+          elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.test' package.json >/dev/null; then "$PM" test
+          elif [[ "$STACK" == "python" ]] && [[ -d tests ]]; then python -m pytest
+          else echo "::notice::No test command configured and none detected; skipped."; fi
+
+      # Build-time secrets come from Infisical's preview environment (CI never
+      # reads production). A transient Infisical outage or an Access gate must
+      # not hard-fail a compile-only build: probe first, skip with a warning.
+      - name: Infisical for the build
+        id: infisical
+        if: needs.guard.outputs.build == 'true'
+        shell: bash
+        env:
+          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_SLUG: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          INFISICAL_ENV_SLUG: ${{ vars.INFISICAL_ENV_SLUG || 'preview' }}
+          INFISICAL_DOMAIN: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$INFISICAL_PROJECT_SLUG" ]]; then echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "No vars.INFISICAL_PROJECT_SLUG; building without Infisical secrets."; exit 0; fi
+          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then method=oidc
+          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then method=universal
+          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::notice::Infisical auth incomplete; building without secrets."; exit 0; fi
+          probe="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 "${INFISICAL_DOMAIN%/}/api/status" 2>/dev/null || true)"
+          code="${probe%% *}"; type="${probe#* }"
+          if [[ "$code" =~ ^2[0-9][0-9]$ && "$type" == application/json* ]]; then
+            { echo "enabled=true"; echo "method=$method"; echo "env-slug=$INFISICAL_ENV_SLUG"; } >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Infisical auth incomplete (set vars.INFISICAL_IDENTITY_ID for OIDC, or secrets.INFISICAL_CLIENT_ID and secrets.INFISICAL_CLIENT_SECRET for Universal Auth), skipping secrets injection step"
-            exit 0
+            echo "::warning::Infisical at $INFISICAL_DOMAIN answered '${code:-000} ${type:-none}' (an Access redirect or an outage); building without secrets."
           fi
-
-          # Reachability pre-check (EDI-381): a transient Infisical backend outage
-          # must NOT hard-fail a compile-only Build. Probe the API health endpoint
-          # with a short timeout; if the backend is unreachable or not serving its
-          # API (the EDI-379 "OIDC 404" outage class: proxy up, API route broken),
-          # skip injection with a ::warning:: and self-heal once the backend
-          # returns. This strictly improves availability — a build that genuinely
-          # needs these secrets still fails at the build step with a clear error;
-          # one that does not (e.g. edilio PR builds, upload_artifacts: false) now
-          # passes. This relaxation is scoped to the Build job ONLY — deploy and
-          # release jobs keep their Infisical load steps strict so missing/down
-          # secrets never silently ship an artifact.
-          #
-          # EDI-404: a Cloudflare Access (Zero Trust) gate in front of the
-          # Infisical host answers unauthenticated machine requests with a 302
-          # to <team>.cloudflareaccess.com (or, on some Access configs, a 200
-          # HTML challenge page). Following that redirect lands on a 200 login
-          # page, which previously fooled the probe into "reachable" — the
-          # secrets-action then received HTML instead of JSON and crashed with
-          # "Cannot read properties of undefined (reading 'map')". So: do NOT
-          # follow redirects, and require Infisical's own JSON content-type.
-          # A 3xx (Access redirect) or non-JSON 200 (Access HTML challenge) now
-          # correctly skips injection instead of hard-failing the build.
-          probe_url="${INFISICAL_DOMAIN%/}/api/status"
-          probe_out="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 "$probe_url" 2>/dev/null || true)"
-          http_code="${probe_out%% *}"
-          content_type="${probe_out#* }"
-          : "${http_code:=000}"
-          : "${content_type:=none}"
-          if [[ "$http_code" =~ ^2[0-9][0-9]$ && "$content_type" == application/json* ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "method=$method" >> "$GITHUB_OUTPUT"
-            echo "::notice::Infisical backend reachable ($probe_url -> HTTP $http_code, $content_type); secrets injection enabled (method=$method)"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Infisical backend unreachable, unhealthy, or behind an auth gate ($probe_url -> HTTP ${http_code:-000}, type ${content_type:-none}); skipping secrets injection for this Build. A 3xx/non-JSON response usually means a Cloudflare Access gate is intercepting machine traffic (EDI-404). Self-heals when the API answers JSON directly. A build that requires these secrets will fail at the build step with a clear error. See EDI-404 / EDI-381 / EDI-380."
-          fi
-
-      - name: 🔐 Load Infisical Secrets (OIDC)
-        if: needs.setup.outputs.enable-build == 'true' && steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'oidc'
+      - name: Load Infisical secrets (OIDC)
+        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          env-slug: ${{ steps.infisical.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
           extra-headers: |
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-
-      - name: 🔐 Load Infisical Secrets (Universal Auth)
-        if: needs.setup.outputs.enable-build == 'true' && steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
+      - name: Load Infisical secrets (Universal Auth)
+        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: universal
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ vars.INFISICAL_ENV_SLUG || secrets.INFISICAL_ENV_SLUG }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          env-slug: ${{ steps.infisical.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
           extra-headers: |
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
-      - name: 🏗️ Run Build
-        if: needs.setup.outputs.enable-build == 'true'
-        uses: maxbec/pipeline/.github/actions/run-build@v4
+      - name: Build
+        if: needs.guard.outputs.build == 'true'
+        shell: bash
+        env:
+          BUILD_COMMAND: ${{ needs.guard.outputs.build-command }}
+          APP_ENV: preview
+        run: |
+          set -euo pipefail
+          if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
+          elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build
+          else echo "::notice::No build command configured and none detected; skipped."; fi
+      - name: Upload build artifact
+        if: needs.guard.outputs.build == 'true' && needs.guard.outputs.artifact-path != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          stack: ${{ needs.setup.outputs.stack }}
-          build-command: ${{ needs.setup.outputs.build-command }}
-          working-directory: ${{ inputs.working-directory }}
-          upload-artifacts: ${{ needs.setup.outputs.build-upload-artifacts }}
-          artifact-name: ${{ needs.setup.outputs.build-artifact-name }}
-          artifact-path: ${{ needs.setup.outputs.build-artifact-path }}
-          attest-artifacts: ${{ needs.setup.outputs.build-attest-artifacts }}
-          artifact-retention-days: ${{ needs.setup.outputs.build-artifact-retention-days }}
+          name: build-${{ github.sha }}
+          path: ${{ needs.guard.outputs.artifact-path }}
+          retention-days: 7
 
-  # =============================================================================
-  # DEPLOYMENT (Provider-specific jobs to avoid loading unused actions)
-  # =============================================================================
-  deploy-vercel:
-    name: 🚀 Vercel / ${{ matrix.environment }}
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 20
+  deploy:
+    name: Deploy (${{ matrix.target.name }})
+    needs: guard
+    if: github.event_name == 'release' && github.event.action == 'published' && needs.guard.outputs.deploy-provider != 'none'
+    runs-on: ${{ fromJSON(needs.guard.outputs.runner) }}
+    timeout-minutes: 30
     permissions:
       contents: read
       deployments: write
-      pull-requests: write
-      id-token: write # OIDC for cloud providers
-    # Gate on the merged static-checks (security + lint) and verify (test +
-    # build) jobs.
-    needs: [setup, static-checks, verify]
-    if: |
-      always() &&
-      needs.setup.outputs.enable-deploy == 'true' &&
-      needs.setup.outputs.deploy-provider == 'vercel' &&
-      needs.setup.outputs.docs-only != 'true' &&
-      needs.setup.outputs.deploy-environments != '[]' &&
-      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
+      packages: write # ghcr
+      id-token: write # OIDC: Infisical, npm trusted publishing
     strategy:
       fail-fast: false
       matrix:
-        environment: ${{ fromJSON(needs.setup.outputs.deploy-environments).*.name }}
+        target: ${{ fromJSON(needs.guard.outputs.deploy-targets) }}
     environment:
-      name: ${{ matrix.environment }}
+      name: ${{ github.event.release.prerelease && 'preview' || 'production' }}
+    env:
+      DEPLOY_ENVIRONMENT: ${{ github.event.release.prerelease && 'preview' || 'production' }}
+      PROVIDER: ${{ needs.guard.outputs.deploy-provider }}
     steps:
-      - name: 📥 Checkout code
+      - name: Route tmp to the runner workdir
+        shell: bash
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Checkout the released commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: 🔧 Setup Node Runtime
-        if: needs.setup.outputs.stack == 'nodejs'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      # The provider actions, at exactly the commit this workflow was pinned to.
+      - name: Checkout the pipeline's actions
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: ${{ needs.setup.outputs.runtime-version }}
+          repository: maxbec/pipeline
+          ref: ${{ github.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: .github/actions
 
-      - name: 🔍 Check Infisical Configuration
-        id: infisical-config
+      - name: Release version
+        id: release
         shell: bash
         env:
-          DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_SLUG_RAW: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
-          INFISICAL_PROD_ENV_SLUG: ${{ vars.INFISICAL_PROD_ENV_SLUG }}
-          INFISICAL_PREVIEW_ENV_SLUG: ${{ vars.INFISICAL_PREVIEW_ENV_SLUG }}
+          TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Map the GitHub deployment environment to an Infisical environment slug.
-          # Defaults match the most common Infisical project (production / preview),
-          # but can be overridden per repo by setting vars.INFISICAL_PROD_ENV_SLUG
-          # and vars.INFISICAL_PREVIEW_ENV_SLUG — for example, edilio uses
-          # `prod` and `staging`.
-          case "${DEPLOY_ENVIRONMENT,,}" in
-          production) RESOLVED_ENV_SLUG="${INFISICAL_PROD_ENV_SLUG:-production}" ;;
-          *) RESOLVED_ENV_SLUG="${INFISICAL_PREVIEW_ENV_SLUG:-preview}" ;;
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "Deploying $TAG to $DEPLOY_ENVIRONMENT"
+
+      - name: Set up pnpm (from packageManager)
+        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version == ''
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - name: Set up pnpm (latest)
+        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version != ''
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: ${{ needs.guard.outputs.pnpm-version }}
+      - name: Set up Node.js
+        if: env.PROVIDER != 'docker-ghcr'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: ${{ needs.guard.outputs.node-version }}
+          cache: ${{ needs.guard.outputs.cache }}
+          registry-url: https://registry.npmjs.org
+      - name: Install dependencies
+        if: env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm'
+        shell: bash
+        env:
+          PM: ${{ needs.guard.outputs.package-manager }}
+        run: |
+          set -euo pipefail
+          case "$PM" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            *) if [[ -f package-lock.json ]]; then npm ci; else npm install; fi ;;
           esac
 
-          if [[ -z "$INFISICAL_PROJECT_SLUG_RAW" ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "project-slug=$INFISICAL_PROJECT_SLUG_RAW" >> "$GITHUB_OUTPUT"
-          echo "env-slug=$RESOLVED_ENV_SLUG" >> "$GITHUB_OUTPUT"
-          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "method=oidc" >> "$GITHUB_OUTPUT"
-            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (OIDC)"
-          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "method=universal" >> "$GITHUB_OUTPUT"
-            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (Universal Auth)"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🔐 Load Infisical Secrets (OIDC)
-        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'oidc'
+      # Deploys read the environment they deploy: preview or production. Strict:
+      # a deploy that cannot read its secrets fails instead of shipping blind.
+      - name: Infisical for the deploy
+        id: infisical
+        if: env.PROVIDER == 'vercel' || env.PROVIDER == 'cloudflare-workers'
+        shell: bash
+        env:
+          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID }}
+          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          INFISICAL_PROJECT_SLUG: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          INFISICAL_PROD_ENV_SLUG: ${{ vars.INFISICAL_PROD_ENV_SLUG || 'production' }}
+          INFISICAL_PREVIEW_ENV_SLUG: ${{ vars.INFISICAL_PREVIEW_ENV_SLUG || 'preview' }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$INFISICAL_PROJECT_SLUG" ]]; then echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [[ "$DEPLOY_ENVIRONMENT" == "production" ]]; then slug="$INFISICAL_PROD_ENV_SLUG"; else slug="$INFISICAL_PREVIEW_ENV_SLUG"; fi
+          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then method=oidc
+          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then method=universal
+          else echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          { echo "enabled=true"; echo "method=$method"; echo "env-slug=$slug"; } >> "$GITHUB_OUTPUT"
+      - name: Load Infisical secrets (OIDC)
+        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
-          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
+          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          env-slug: ${{ steps.infisical.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
           extra-headers: |
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-
-      - name: 🔐 Load Infisical Secrets (Universal Auth)
-        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
+      - name: Load Infisical secrets (Universal Auth)
+        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: universal
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
-          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
+          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
+          env-slug: ${{ steps.infisical.outputs.env-slug }}
+          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
+          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
           extra-headers: |
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
-      - name: 🚀 Deploy to Vercel
-        uses: maxbec/pipeline/.github/actions/deploy-vercel@v4
+      - name: Deploy to Vercel
+        if: env.PROVIDER == 'vercel'
+        uses: ./.pipeline/.github/actions/deploy-vercel
+        env:
+          APP_ENV: ${{ env.DEPLOY_ENVIRONMENT }}
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-scope: ${{ needs.setup.outputs.vercel-scope }}
-          environment: ${{ matrix.environment }}
-          github-token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          working-directory: ${{ inputs.working-directory }}
-          build-command: ${{ needs.setup.outputs.vercel-build-command }}
+          vercel-scope: ${{ needs.guard.outputs.vercel-scope }}
+          environment: ${{ env.DEPLOY_ENVIRONMENT }}
+          github-token: ${{ github.token }}
+          build-command: ${{ needs.guard.outputs.vercel-build-command }}
 
-  deploy-cloudflare:
-    name: 🚀 Cloudflare / ${{ matrix.environment }}
-    # Trusted-publishing-style OIDC is not available for wrangler, so this runs
-    # wherever the org points its runners, same as the other providers.
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      deployments: write
-      pull-requests: write
-      id-token: write # OIDC for cloud providers
-    # Gate on the merged static-checks (security + lint) and verify (test +
-    # build) jobs.
-    needs: [setup, static-checks, verify]
-    if: |
-      always() &&
-      needs.setup.outputs.enable-deploy == 'true' &&
-      needs.setup.outputs.deploy-provider == 'cloudflare-workers' &&
-      needs.setup.outputs.docs-only != 'true' &&
-      needs.setup.outputs.deploy-environments != '[]' &&
-      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        environment: ${{ fromJSON(needs.setup.outputs.deploy-environments).*.name }}
-    environment:
-      name: ${{ matrix.environment }}
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🔧 Setup Node Runtime
-        if: needs.setup.outputs.stack == 'nodejs'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ needs.setup.outputs.runtime-version }}
-
-      # The Worker is built here, not in `verify`, so the build sees the target
-      # environment's secrets. Installing first is what makes that build possible.
-      - name: 📦 Install Dependencies
-        if: needs.setup.outputs.stack == 'nodejs'
-        uses: maxbec/pipeline/.github/actions/install-dependencies@v4
-        with:
-          stack: ${{ needs.setup.outputs.stack }}
-          package-manager: ${{ needs.setup.outputs.package-manager }}
-          working-directory: ${{ inputs.working-directory }}
-
-      - name: 🔍 Check Infisical Configuration
-        id: infisical-config
-        shell: bash
+      - name: Deploy to Cloudflare Workers
+        if: env.PROVIDER == 'cloudflare-workers'
+        uses: ./.pipeline/.github/actions/deploy-cloudflare
         env:
-          DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_SLUG_RAW: ${{ vars.INFISICAL_PROJECT_SLUG || secrets.INFISICAL_PROJECT_SLUG }}
-          INFISICAL_PROD_ENV_SLUG: ${{ vars.INFISICAL_PROD_ENV_SLUG }}
-          INFISICAL_PREVIEW_ENV_SLUG: ${{ vars.INFISICAL_PREVIEW_ENV_SLUG }}
-        run: |
-          set -euo pipefail
-          # Map the GitHub deployment environment to an Infisical environment slug.
-          # Defaults match the most common Infisical project (production / preview),
-          # but can be overridden per repo by setting vars.INFISICAL_PROD_ENV_SLUG
-          # and vars.INFISICAL_PREVIEW_ENV_SLUG — for example, edilio uses
-          # `prod` and `staging`.
-          case "${DEPLOY_ENVIRONMENT,,}" in
-          production) RESOLVED_ENV_SLUG="${INFISICAL_PROD_ENV_SLUG:-production}" ;;
-          *) RESOLVED_ENV_SLUG="${INFISICAL_PREVIEW_ENV_SLUG:-preview}" ;;
-          esac
-
-          if [[ -z "$INFISICAL_PROJECT_SLUG_RAW" ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "project-slug=$INFISICAL_PROJECT_SLUG_RAW" >> "$GITHUB_OUTPUT"
-          echo "env-slug=$RESOLVED_ENV_SLUG" >> "$GITHUB_OUTPUT"
-          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "method=oidc" >> "$GITHUB_OUTPUT"
-            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (OIDC)"
-          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "method=universal" >> "$GITHUB_OUTPUT"
-            echo "✅ Infisical deploy env slug: $RESOLVED_ENV_SLUG (Universal Auth)"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🔐 Load Infisical Secrets (OIDC)
-        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'oidc'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID || secrets.INFISICAL_IDENTITY_ID }}
-          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
-          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-
-      - name: 🔐 Load Infisical Secrets (Universal Auth)
-        if: steps.infisical-config.outputs.enabled == 'true' && steps.infisical-config.outputs.method == 'universal'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: universal
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ steps.infisical-config.outputs.project-slug }}
-          env-slug: ${{ steps.infisical-config.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || secrets.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || secrets.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-
-      - name: 🚀 Deploy to Cloudflare Workers
-        uses: maxbec/pipeline/.github/actions/deploy-cloudflare@v4
+          APP_ENV: ${{ env.DEPLOY_ENVIRONMENT }}
         with:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          environment: ${{ matrix.environment }}
-          build-command: ${{ needs.setup.outputs.cloudflare-build-command }}
-          wrangler-config: ${{ needs.setup.outputs.cloudflare-config }}
-          working-directory: ${{ inputs.working-directory }}
-          github-token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+          environment: ${{ env.DEPLOY_ENVIRONMENT }}
+          build-command: ${{ needs.guard.outputs.cloudflare-build-command }}
+          wrangler-config: ${{ needs.guard.outputs.cloudflare-config }}
+          github-token: ${{ github.token }}
 
-  deploy-digitalocean:
-    name: 🚀 DigitalOcean / ${{ matrix.environment }}
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      deployments: write
-      pull-requests: write
-      id-token: write # OIDC for cloud providers
-    # Gate on the merged static-checks + verify jobs.
-    needs: [setup, static-checks, verify]
-    if: |
-      always() &&
-      needs.setup.outputs.enable-deploy == 'true' &&
-      needs.setup.outputs.deploy-provider == 'digitalocean' &&
-      needs.setup.outputs.docs-only != 'true' &&
-      needs.setup.outputs.deploy-environments != '[]' &&
-      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-      (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-    strategy:
-      fail-fast: false
-      matrix:
-        environment: ${{ fromJSON(needs.setup.outputs.deploy-environments).*.name }}
-    environment:
-      name: ${{ matrix.environment }}
-    steps:
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🚀 Deploy to DigitalOcean
-        uses: maxbec/pipeline/.github/actions/deploy-digitalocean@v4
-        with:
-          digitalocean-token: ${{ secrets.DIGITALOCEAN_TOKEN }}
-          app-name:
-            ${{ needs.setup.outputs.digitalocean-app-name != '' &&
-            needs.setup.outputs.digitalocean-app-name || github.event.repository.name }}
-          app-spec-location: ${{ needs.setup.outputs.digitalocean-app-spec }}
-          environment: ${{ matrix.environment }}
-          is-pr-preview: ${{ matrix.environment == 'preview' && github.event_name == 'pull_request' }}
-          print-build-logs: ${{ needs.setup.outputs.digitalocean-print-build-logs }}
-          print-deploy-logs: ${{ needs.setup.outputs.digitalocean-print-deploy-logs }}
-
-  deploy-docker:
-    name: 🐳 Docker / ${{ matrix.image.name }}
-    runs-on: ${{ fromJSON(needs.setup.outputs.runner-labels) }}
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      deployments: write
-      packages: write
-      id-token: write # OIDC for cloud providers
-    # Gate on the merged static-checks + verify jobs; keep `release` (reads
-    # needs.release.outputs.release-version for the image tag).
-    needs: [setup, static-checks, verify, release]
-    if: |
-      always() &&
-      needs.setup.outputs.enable-deploy == 'true' &&
-      needs.setup.outputs.deploy-provider == 'docker' &&
-      needs.setup.outputs.docs-only != 'true' &&
-      needs.setup.outputs.docker-images != '[]' &&
-      (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-      (needs.verify.result == 'success' || needs.verify.result == 'skipped') &&
-      (needs.release.result == 'success' || needs.release.result == 'skipped')
-    strategy:
-      fail-fast: true
-      matrix:
-        image: ${{ fromJSON(needs.setup.outputs.docker-images) }}
-    steps:
-      # /tmp is noexec on hardened rootless runners; keep tmp on the exec-capable
-      # runner workdir for build tooling that mktemp+execs. See static-checks.
-      # No-op on GitHub-hosted runners, where RUNNER_TEMP is already exec-capable.
-      - name: 🧭 Route tmp to exec-capable runner workdir
-        shell: bash
-        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🔍 Resolve Image Metadata
-        id: resolve
+      - name: Image metadata
+        id: meta
+        if: env.PROVIDER == 'docker-ghcr'
         shell: bash
         env:
           REPO: ${{ github.repository }}
-          IMAGE_NAME_OVERRIDE: ${{ matrix.image.image_name }}
-          IMAGE_SUFFIX: ${{ matrix.image.name }}
-          RELEASE_VERSION: ${{ needs.release.outputs.release-version }}
-          MANIFEST_FILE: ${{ needs.setup.outputs.release-manifest-file-resolved }}
-          EXTRA_BUILD_ARGS: ${{ matrix.image.build_args }}
+          IMAGE_SUFFIX: ${{ matrix.target.name }}
+          IMAGE_NAME_OVERRIDE: ${{ matrix.target.image_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+          EXTRA_BUILD_ARGS: ${{ matrix.target.build_args }}
         run: |
           set -euo pipefail
           REPO_LOWER="${REPO,,}"
-
-          # Determine image name: explicit override > repo-suffix > repo name
-          if [[ -n "$IMAGE_NAME_OVERRIDE" ]]; then
-            IMAGE_NAME="$IMAGE_NAME_OVERRIDE"
-          elif [[ -n "$IMAGE_SUFFIX" && "$IMAGE_SUFFIX" != "default" ]]; then
-            IMAGE_NAME="${REPO_LOWER}-${IMAGE_SUFFIX}"
-          else
-            IMAGE_NAME="$REPO_LOWER"
-          fi
-
-          # Determine image tag: release version > git sha
-          # (primary tag; uniquely identifies this specific build)
-          if [[ -n "$RELEASE_VERSION" ]]; then
-            IMAGE_TAG="$RELEASE_VERSION"
-          else
-            IMAGE_TAG="${GITHUB_SHA}"
-          fi
-
-          # Determine floating version tag (applied in addition to image-tag
-          # on every build): release-please's release version on release
-          # commits, else the current version from the release-please
-          # manifest. The tag moves to the newest build within the same
-          # version cycle; per-build uniqueness is preserved by the
-          # dev-<sha> / full-sha tags.
-          VERSION_TAG=""
-          if [[ -n "$RELEASE_VERSION" ]]; then
-            VERSION_TAG="$RELEASE_VERSION"
-          elif [[ -n "$MANIFEST_FILE" && -f "$MANIFEST_FILE" ]]; then
-            VERSION_TAG=$(jq -r '."." // empty' "$MANIFEST_FILE" 2>/dev/null || true)
-          fi
-
-          # Build args: inject APP_VERSION whenever a version is known.
-          # Separator is an explicit $'\n' so YAML block indentation doesn't
-          # bleed into the value and break docker/build-push-action parsing.
-          BUILD_ARGS="${EXTRA_BUILD_ARGS}"
-          if [[ -n "$VERSION_TAG" ]]; then
-            [[ -n "$BUILD_ARGS" ]] && BUILD_ARGS+=$'\n'
-            BUILD_ARGS+="APP_VERSION=${VERSION_TAG}"
-          fi
-
-          echo "image-name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
-          echo "image-tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-          echo "version-tag=$VERSION_TAG" >> "$GITHUB_OUTPUT"
-          echo "build-args<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$BUILD_ARGS" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: 🚀 Deploy Docker Image
-        uses: maxbec/pipeline/.github/actions/deploy-docker@v4
+          if [[ -n "$IMAGE_NAME_OVERRIDE" ]]; then NAME="$IMAGE_NAME_OVERRIDE"
+          elif [[ -n "$IMAGE_SUFFIX" && "$IMAGE_SUFFIX" != "default" && "$IMAGE_SUFFIX" != "app" ]]; then NAME="${REPO_LOWER}-${IMAGE_SUFFIX}"
+          else NAME="$REPO_LOWER"; fi
+          # A stable release moves :latest (what production stacks pull); a
+          # prerelease moves :dev (what the preview stack pulls). Both keep :<version>.
+          if [[ "$PRERELEASE" == "true" ]]; then CHANNEL=dev; else CHANNEL=latest; fi
+          BUILD_ARGS="APP_VERSION=${VERSION}"
+          if [[ -n "$EXTRA_BUILD_ARGS" ]]; then BUILD_ARGS+=$'\n'"$EXTRA_BUILD_ARGS"; fi
+          {
+            echo "image-name=$NAME"
+            echo "image-tag=$VERSION"
+            echo "version-tag=$CHANNEL"
+            echo "build-args<<PIPELINE_EOF"; printf '%s\n' "$BUILD_ARGS"; echo "PIPELINE_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build and push the image
+        if: env.PROVIDER == 'docker-ghcr'
+        uses: ./.pipeline/.github/actions/deploy-docker
         with:
-          dockerfile: ${{ matrix.image.dockerfile || 'Dockerfile' }}
-          context: ${{ matrix.image.context || '.' }}
-          image-name: ${{ steps.resolve.outputs.image-name }}
-          image-tag: ${{ steps.resolve.outputs.image-tag }}
-          version-tag: ${{ steps.resolve.outputs.version-tag }}
-          registry: ${{ matrix.image.registry || 'ghcr' }}
-          build-args: ${{ steps.resolve.outputs.build-args }}
-          platforms: ${{ matrix.image.platforms || 'linux/amd64' }}
-          registry-password: ${{ secrets.DOCKER_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
-          registry-username: ${{ secrets.DOCKER_REGISTRY_USERNAME || github.actor }}
-          cache-backend: ${{ needs.setup.outputs.docker-cache-backend }}
-          # Per-image separation, so two images in one repo cannot overwrite
-          # each other's cache — `scope` does that for gha, a subdirectory for
-          # local.
-          cache-scope: ${{ matrix.image.name }}
+          dockerfile: ${{ matrix.target.dockerfile || 'Dockerfile' }}
+          context: ${{ matrix.target.context || '.' }}
+          image-name: ${{ steps.meta.outputs.image-name }}
+          image-tag: ${{ steps.meta.outputs.image-tag }}
+          version-tag: ${{ steps.meta.outputs.version-tag }}
+          registry: ghcr
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ github.token }}
+          build-args: ${{ steps.meta.outputs.build-args }}
+          platforms: ${{ matrix.target.platforms || 'linux/amd64' }}
+          cache-backend: ${{ needs.guard.outputs.docker-cache-backend }}
+          cache-scope: ${{ matrix.target.name }}
+      # Watchtower on the host polls the registry; nothing to trigger here.
+      - name: Render deploy hook
+        if: |
+          env.PROVIDER == 'docker-ghcr' && needs.guard.outputs.render-hook == 'true' &&
+          env.DEPLOY_ENVIRONMENT == 'production' && matrix.target.name == needs.guard.outputs.primary-target
+        uses: ./.pipeline/.github/actions/deploy-render
+        with:
+          deploy-hook-url: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          environment: production
+          service-name: ${{ github.event.repository.name }}
+          github-token: ${{ github.token }}
 
-  # =============================================================================
-  # RELEASE MANAGEMENT
-  # =============================================================================
-  release:
-    name: 📦 Release Management
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 15
-    permissions:
-      contents: write
-      pull-requests: write
-      id-token: write # OIDC for release signing
-    # Gate on the merged static-checks + verify jobs.
-    needs: [setup, static-checks, verify]
-    outputs:
-      release-created: ${{ steps.release-mgmt.outputs.release-created }}
-      release-version: ${{ steps.release-mgmt.outputs.release-version }}
-      release-tag: ${{ steps.release-mgmt.outputs.release-tag }}
-      release-pr-number: ${{ steps.release-mgmt.outputs.pr-number }}
-    # On a stable branch this job cuts the tag and the GitHub Release, so red
-    # validation still stops it dead.
-    #
-    # On a prerelease branch it now runs anyway, and cuts nothing when
-    # validation was red — see `skip-github-release` below. Skipping it there
-    # meant the open release pull request was never refreshed for the commits
-    # of a red push, so its changelog quietly stopped describing the branch.
-    # Measured on edilio-app/edilio: seven red pushes to `dev` in three weeks,
-    # one of which left the release notes stale for three days. Nothing
-    # backfills them — the next green push picks up everything still
-    # unreleased, which is correct, but a promotion that happens before that
-    # ships a changelog that does not describe `main`.
-    if: |
-      always() &&
-      needs.setup.outputs.enable-release == 'true' &&
-      github.event_name == 'push' &&
-      (
-        (
-          (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
-          (needs.verify.result == 'success' || needs.verify.result == 'skipped')
-        ) ||
-        needs.setup.outputs.is-prerelease-branch == 'true'
-      )
-    steps:
-      # Minting the installation token in-job is deliberate: passing a token
-      # through `needs.*.outputs.*` makes GitHub Actions strip it with the
-      # "Skip output 'token' since it may contain secret." warning, which
-      # silently degrades to GITHUB_TOKEN and breaks workflow triggering on
-      # release-please PR pushes.
-      - name: 🔎 Check app credentials
-        id: app-creds
+      # Trusted publishing: npm mints provenance from the OIDC token; NPM_TOKEN
+      # is only for packages that have not been switched over yet.
+      - name: Publish to npm
+        if: env.PROVIDER == 'npm'
         shell: bash
         env:
-          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-          PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-        run: |
-          if [[ -n "$APP_ID" && -n "$PRIVATE_KEY" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🔑 Mint GitHub App token
-        id: app-token
-        if: steps.app-creds.outputs.available == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.WORKFLOW_APP_ID }}
-          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: 🔍 Resolve prerelease config
-        id: prerelease
-        shell: bash
-        env:
-          PRERELEASE_BRANCHES: ${{ needs.setup.outputs.prerelease-branches }}
-          CURRENT_BRANCH: ${{ github.ref_name }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PM: ${{ needs.guard.outputs.package-manager }}
+          BUILD_COMMAND: ${{ needs.guard.outputs.build-command }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
-          IS_PRERELEASE="false"
-          PRERELEASE_TYPE=""
-
-          if [[ "$PRERELEASE_BRANCHES" != "[]" ]]; then
-            MATCH=$(echo "$PRERELEASE_BRANCHES" | jq -r \
-              --arg branch "$CURRENT_BRANCH" \
-              '.[] | select(.branch == $branch) | .label')
-            if [[ -n "$MATCH" ]]; then
-              IS_PRERELEASE="true"
-              PRERELEASE_TYPE="$MATCH"
-              echo "Branch '$CURRENT_BRANCH' is a prerelease branch with label '$MATCH'"
-            fi
-          fi
-
-          echo "is-prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "prerelease-type=$PRERELEASE_TYPE" >> "$GITHUB_OUTPUT"
-
-          # Select config file: use stable config on non-prerelease branches if available
-          STABLE_CONFIG="${{ needs.setup.outputs.release-config-file-stable }}"
-          DEFAULT_CONFIG="${{ needs.setup.outputs.release-config-file }}"
-          if [[ "$IS_PRERELEASE" == "false" && -n "$STABLE_CONFIG" ]]; then
-            echo "config-file=$STABLE_CONFIG" >> "$GITHUB_OUTPUT"
-            echo "Using stable config: $STABLE_CONFIG"
-          else
-            echo "config-file=$DEFAULT_CONFIG" >> "$GITHUB_OUTPUT"
-            echo "Using default config: $DEFAULT_CONFIG"
-          fi
-
-      # Refreshing a release pull request from a red tree is safe: it writes a
-      # changelog, and the pull request is validated in its own right before
-      # anyone merges it. Cutting a tag and a GitHub Release from a red tree is
-      # not. This separates the two, so a red prerelease push keeps the release
-      # notes current without publishing anything.
-      - name: 🚧 Decide whether a release may be cut
-        id: cut
-        shell: bash
-        env:
-          STATIC_RESULT: ${{ needs.static-checks.result }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
-        run: |
-          set -euo pipefail
-          skip=false
-          for pair in "static-checks:$STATIC_RESULT" "verify:$VERIFY_RESULT"; do
-            res="${pair#*:}"
-            if [[ "$res" != "success" && "$res" != "skipped" ]]; then
-              echo "::warning::${pair%%:*} did not pass (result=$res). Refreshing the release pull request, but no release will be cut from this commit."
-              skip=true
-            fi
-          done
-          echo "skip-github-release=$skip" >> "$GITHUB_OUTPUT"
-
-      - name: 📦 Run Release Management
-        id: release-mgmt
-        uses: maxbec/pipeline/.github/actions/release-management@v4
-        with:
-          github-token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          skip-github-release: ${{ steps.cut.outputs.skip-github-release }}
-          npm-token: ${{ secrets.NPM_TOKEN }}
-          strategy: ${{ needs.setup.outputs.release-strategy }}
-          force-patch-on-no-release: ${{ needs.setup.outputs.release-force-patch-on-no-release }}
-          extra-plugins: ${{ needs.setup.outputs.release-extra-plugins }}
-          config-file: ${{ steps.prerelease.outputs.config-file }}
-          manifest-file: ${{ needs.setup.outputs.release-manifest-file-resolved }}
-          target-branch: ${{ github.ref_name }}
-          prerelease: ${{ steps.prerelease.outputs.is-prerelease }}
-          prerelease-type: ${{ steps.prerelease.outputs.prerelease-type }}
-          release-type: ${{ needs.setup.outputs.release-type != '' && needs.setup.outputs.release-type || (needs.setup.outputs.stack == 'nodejs' && 'node' || needs.setup.outputs.stack == 'python' && 'python' || 'simple') }}
-          draft-pull-request: ${{ needs.setup.outputs.release-draft-pull-request }}
-  # =============================================================================
-  # RECONCILE DEV MANIFEST (After Stable Release)
-  # =============================================================================
-  # The former `main` -> `dev` back-merge ("sync to dev") is retired: it never
-  # landed and cannot, because `dev` requires a PR + signed commits + status
-  # checks, so an unsigned runner direct-push is rejected. Its purpose
-  # (conflict-free promotions) is now handled defensively on the promote side
-  # (navigaite/.github#259 / NAV-46). This job now only performs the dual-track
-  # (Profile B) prerelease-manifest reconcile, delivered via an auto-merged
-  # squash PR. It is a no-op for non-dual-track repos. See NAV-50.
-  sync-to-dev:
-    name: 🔄 Reconcile Dev Manifest
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-    needs: [setup, release, deploy-docker]
-    if: |
-      always() &&
-      needs.setup.outputs.enable-sync == 'true' &&
-      needs.setup.outputs.enable-release == 'true' &&
-      needs.release.outputs.release-created == 'true' &&
-      github.ref == 'refs/heads/main' &&
-      github.event_name == 'push' &&
-      needs.release.result == 'success' &&
-      (needs.deploy-docker.result == 'success' || needs.deploy-docker.result == 'skipped')
-    steps:
-      - name: 🔎 Check app credentials
-        id: app-creds
-        shell: bash
-        env:
-          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-          PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-        run: |
-          if [[ -n "$APP_ID" && -n "$PRIVATE_KEY" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🔑 Mint GitHub App token
-        id: app-token
-        if: steps.app-creds.outputs.available == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.WORKFLOW_APP_ID }}
-          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
-      - name: 📥 Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: 🔄 Reconcile Dev Manifest
-        uses: maxbec/pipeline/.github/actions/sync-branches@v4
-        with:
-          source-branch: main
-          target-branch: ${{ needs.setup.outputs.sync-target-branch }}
-          github-token: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          auto-merge-pr: true
-          # Dual-track (Profile B) reconcile: after the stable release lands on
-          # main, reset the dev (beta) prerelease manifest base to the released
-          # stable version so the next dev release stays above stable, delivered
-          # via an auto-merged squash PR. No-op unless both manifests are
-          # configured and differ.
-          prerelease-manifest-file: ${{ needs.setup.outputs.release-manifest-file }}
-          stable-manifest-file: ${{ needs.setup.outputs.release-manifest-file-stable }}
-          stable-version: ${{ needs.release.outputs.release-version }}
-
-  # =============================================================================
-  # PROMOTION PR (dev → main) — one-button release, step 1
-  # =============================================================================
-  # Keeps a dev → main promotion PR open and current whenever dev is ahead of
-  # main, reusing the promote-to-main machinery (pre-resolved `promote/*`
-  # staging branch + GitHub-signed merge commit) so both Branch Guard styles —
-  # head `dev` accepted directly, or bot-authored `promote/*` required — pass.
-  # In auto mode the reusable soft-skips while a release-please PR is open on
-  # dev and refreshes an existing stale promotion PR in place. The promotion
-  # PR itself is NEVER auto-merged: merging it is the one human action in the
-  # release flow (Flama Auto Merge independently excludes PRs targeting the
-  # release branch on the major profile, and release-please heads everywhere).
-  # Ordered after `release` so the beta release-PR state is settled first.
-  promotion-pr:
-    name: 📤 Promotion PR
-    needs: [setup, release]
-    if: |
-      always() &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/dev' &&
-      needs.setup.result == 'success' &&
-      needs.setup.outputs.auto-promotion-pr == 'true' &&
-      (needs.release.result == 'success' || needs.release.result == 'skipped')
-    permissions:
-      contents: write
-      pull-requests: write
-    uses: maxbec/pipeline/.github/workflows/promote-to-main.yaml@v3
-    with:
-      auto: true
-    secrets:
-      WORKFLOW_APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-      WORKFLOW_APP_PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
-  # =============================================================================
-  # STABLE RELEASE PR AUTO-MERGE — one-button release, step 2
-  # =============================================================================
-  # After a push to main leaves an open stable release-please PR (typically the
-  # push that merged the promotion PR), arm GitHub auto-merge on it so the
-  # release lands without a second human merge. Every required check is still
-  # enforced by GitHub at merge time — this only removes the button-press.
-  # Only `release-please*` heads are ever considered: promotion PRs (head
-  # `dev` or `promote/*`) must never be auto-merged.
-  release-pr-automerge:
-    name: 🤖 Release PR Auto-merge
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-      pull-requests: write
-    needs: [setup, release]
-    if: |
-      always() &&
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' &&
-      needs.setup.outputs.enable-release == 'true' &&
-      needs.release.result == 'success' &&
-      needs.release.outputs.release-created != 'true'
-    steps:
-      - name: 🔎 Check app credentials
-        id: app-creds
-        shell: bash
-        env:
-          APP_ID: ${{ secrets.WORKFLOW_APP_ID }}
-          PRIVATE_KEY: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-        run: |
-          if [[ -n "$APP_ID" && -n "$PRIVATE_KEY" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: 🔑 Mint GitHub App token
-        id: app-token
-        if: steps.app-creds.outputs.available == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          app-id: ${{ secrets.WORKFLOW_APP_ID }}
-          private-key: ${{ secrets.WORKFLOW_APP_PRIVATE_KEY }}
-
-      - name: 🤖 Arm auto-merge on the stable release PR
-        shell: bash
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          CONFIGURED: ${{ needs.setup.outputs.auto-release-merge }}
-          PROFILE: ${{ needs.setup.outputs.profile }}
-          DEPLOY_PROVIDER: ${{ needs.setup.outputs.deploy-provider }}
-          PR_NUMBER_HINT: ${{ needs.release.outputs.release-pr-number }}
-          APP_AVAILABLE: ${{ steps.app-creds.outputs.available }}
-        run: |
-          set -euo pipefail
-
-          # Resolve the effective setting. Explicit config always wins; the
-          # default is FALSE everywhere — nothing merges into `main` without a
-          # human. The previous default armed auto-merge whenever a `dev`
-          # branch existed, on the theory that the promotion PR was the only
-          # human merge; in practice the stable release PR then self-merged
-          # minutes after each promotion landed. A repo that genuinely wants
-          # hands-free releases (a library with no deploy provider) opts in
-          # with `release.auto_release_merge: true`.
-          DECISION="$CONFIGURED"
-          if [[ -z "$DECISION" || "$DECISION" == "null" ]]; then
-            DECISION="false"
-          fi
-          if [[ "$DECISION" != "true" ]]; then
-            echo "::notice::auto_release_merge resolved to '$DECISION' — release PR left for a human merge."
-            exit 0
-          fi
-
-          # Locate the stable release-please PR. Only release-please heads
-          # are ever considered here.
-          PR_NUMBER="$PR_NUMBER_HINT"
-          if [[ -z "$PR_NUMBER" ]]; then
-            PR_NUMBER=$(gh pr list --repo "$REPO" --base main --state open \
-              --json number,headRefName,author \
-              --jq '[.[] | select(.headRefName | startswith("release-please"))
-                     | select(.author.is_bot == true
-                              or (.author.login | test("github-actions")))][0].number // empty')
-          fi
-          if [[ -z "$PR_NUMBER" ]]; then
-            echo "::notice::No open stable release PR on main — nothing to arm."
-            exit 0
-          fi
-
-          PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
-            --json headRefName,baseRefName,isDraft,state)
-          HEAD_REF=$(jq -r '.headRefName' <<<"$PR_JSON")
-          BASE_REF=$(jq -r '.baseRefName' <<<"$PR_JSON")
-          IS_DRAFT=$(jq -r '.isDraft' <<<"$PR_JSON")
-          STATE=$(jq -r '.state' <<<"$PR_JSON")
-          if [[ "$STATE" != "OPEN" || "$BASE_REF" != "main" ]]; then
-            echo "::notice::PR #$PR_NUMBER is not an open PR on main — skipping."
-            exit 0
-          fi
-          if [[ "$HEAD_REF" != release-please* ]]; then
-            echo "::error::PR #$PR_NUMBER head '$HEAD_REF' is not a release-please branch — refusing to arm."
-            exit 1
-          fi
-
-          if [[ "$APP_AVAILABLE" != "true" ]]; then
-            echo "::warning::No WORKFLOW_APP credentials — the eventual merge is performed by" \
-              "github-actions[bot], whose push to main does NOT trigger the release workflow." \
-              "Configure the App secrets for a fully hands-free release."
-          fi
-
-          # Draft release PRs (the default) skip full CI while parked; marking
-          # ready re-triggers the complete PR pipeline, and auto-merge below
-          # waits for every required check before merging.
-          if [[ "$IS_DRAFT" == "true" ]]; then
-            gh pr ready "$PR_NUMBER" --repo "$REPO"
-          fi
-
-          # main merges with a merge commit on the two-branch (major) profile;
-          # the single-branch (fast) profile squashes to main.
-          METHOD="--merge"
-          MERGE_METHOD="merge"
-          if [[ "$PROFILE" == "fast" ]]; then
-            METHOD="--squash"
-            MERGE_METHOD="squash"
-          fi
-
-          if gh pr merge "$PR_NUMBER" --repo "$REPO" "$METHOD" --auto 2>"$RUNNER_TEMP/arm.err"; then
-            echo "✅ Auto-merge armed on release PR #$PR_NUMBER ($MERGE_METHOD)."
-            exit 0
-          fi
-          if grep -qiE 'already enabled|auto merge is already' "$RUNNER_TEMP/arm.err"; then
-            echo "✅ Auto-merge already armed on release PR #$PR_NUMBER."
-            exit 0
-          fi
-          # A PR whose checks are already green cannot be armed ("clean
-          # status"); merge it directly through the REST endpoint, which still
-          # enforces every branch protection at merge time.
-          if grep -qiE 'clean status|not in the correct state' "$RUNNER_TEMP/arm.err"; then
-            gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/merge" -f merge_method="$MERGE_METHOD"
-            echo "✅ Release PR #$PR_NUMBER merged directly (was already green)."
-            exit 0
-          fi
-          cat "$RUNNER_TEMP/arm.err" >&2
-          exit 1
-
-  # =============================================================================
-  # PIPELINE GATE — hard invariant: a required check never passes on skipped tests
-  # =============================================================================
-  # Root-cause fix for the logical hole where `verify` (Test/Build) or
-  # `static-checks` (Lint/Security) were *skipped* for a non-legitimate reason
-  # yet the reusable workflow still reported success — GitHub treats an
-  # `if:`-skipped job as non-failing, so the caller's `Check Gate`
-  # (`case failure|cancelled) exit 1`) went green without validation ever running.
-  # The `gh pr ready --undo && ready` dance was a manual workaround for this.
-  #
-  # This job runs with `always()` and fails the whole reusable workflow (hence
-  # the caller's Check Gate) when, on a *validating* pull_request (ready, not
-  # docs-only), a stage that is ENABLED in pipeline.yaml did not actually run and
-  # succeed. Push events legitimately skip validation (the PR already proved it),
-  # so the strict must-run assertion is scoped to pull_request events only.
-  #
-  # Because every consumer calls this reusable workflow at a moving major tag
-  # (`@v3`), this fix propagates to the whole org with no per-repo change.
-  pipeline-gate:
-    name: 🚦 Pipeline Gate
-    if: always()
-    needs: [setup, static-checks, verify]
-    runs-on: ${{ vars.PIPELINE_RUNNER && fromJSON(vars.PIPELINE_RUNNER) || 'ubuntu-latest' }}
-    timeout-minutes: 2
-    permissions: {}
-    steps:
-      - name: Enforce validation invariants
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          IS_DRAFT: ${{ github.event.pull_request.draft }}
-          DOCS_ONLY: ${{ needs.setup.outputs.docs-only }}
-          ENABLE_TEST: ${{ needs.setup.outputs.enable-test }}
-          ENABLE_BUILD: ${{ needs.setup.outputs.enable-build }}
-          ENABLE_LINT: ${{ needs.setup.outputs.enable-lint }}
-          ENABLE_SECURITY: ${{ needs.setup.outputs.enable-security }}
-          SETUP_RESULT: ${{ needs.setup.result }}
-          STATIC_RESULT: ${{ needs.static-checks.result }}
-          VERIFY_RESULT: ${{ needs.verify.result }}
-        run: |
-          set -euo pipefail
-          echo "event=$EVENT_NAME draft=${IS_DRAFT:-n/a} docs_only=${DOCS_ONLY:-false}"
-          echo "results: setup=$SETUP_RESULT static-checks=$STATIC_RESULT verify=$VERIFY_RESULT"
-
-          # Setup is the source of truth for what should run; if it did not
-          # succeed the whole run is untrustworthy.
-          if [[ "$SETUP_RESULT" != "success" ]]; then
-            echo "::error::Setup did not succeed (result=$SETUP_RESULT); cannot certify pipeline."
-            exit 1
-          fi
-
-          # Any hard failure/cancellation in a validation stage fails the gate.
-          for pair in "static-checks:$STATIC_RESULT" "verify:$VERIFY_RESULT"; do
-            stage="${pair%%:*}"; res="${pair#*:}"
-            if [[ "$res" == "failure" || "$res" == "cancelled" ]]; then
-              echo "::error::Validation stage '$stage' $res."
-              exit 1
-            fi
-          done
-
-          # Strict must-run enforcement only on validating pull_request events.
-          # Draft PRs cannot be merged; docs-only changes legitimately skip.
-          if [[ "$EVENT_NAME" != "pull_request" || "$IS_DRAFT" == "true" || "$DOCS_ONLY" == "true" ]]; then
-            echo "✅ Non-validating context — gate satisfied."
-            exit 0
-          fi
-
-          fail=0
-          if [[ "$ENABLE_TEST" == "true" || "$ENABLE_BUILD" == "true" ]]; then
-            if [[ "$VERIFY_RESULT" != "success" ]]; then
-              echo "::error::Test/Build are enabled but the Verify stage did not run (result=$VERIFY_RESULT). A required gate must not pass on skipped tests."
-              fail=1
-            fi
-          fi
-          if [[ "$ENABLE_LINT" == "true" || "$ENABLE_SECURITY" == "true" ]]; then
-            if [[ "$STATIC_RESULT" != "success" ]]; then
-              echo "::error::Lint/Security are enabled but Static Checks did not run (result=$STATIC_RESULT)."
-              fail=1
-            fi
-          fi
-          [[ "$fail" -eq 0 ]] || exit 1
-          echo "✅ All enabled validation stages ran and passed."
+          if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
+          elif jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build; fi
+          TAG_ARGS=()
+          if [[ "$PRERELEASE" == "true" ]]; then TAG_ARGS=(--tag next); fi
+          npm publish --access public "${TAG_ARGS[@]}"

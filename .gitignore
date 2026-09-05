@@ -148,3 +148,5 @@ public/sitemap.xml
 .flaskenv*
 !.env.project
 !.env.vault
+# test scratch space (see test/helpers.mjs)
+test/.scratch/
