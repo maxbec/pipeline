@@ -23,7 +23,9 @@ Two files, both written by `provisioning/migrate-repos.ts` in `maxbec/flaiky`:
    check-run `pipeline / Check`.
 2. `.github/pipeline.yaml` — version 3, see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
-Callers pin `universal-pipeline.yaml@<40-char sha> # vX.Y.Z`. Inside the called
+Callers pin `universal-pipeline.yaml@<40-char sha>`, with the tag as a `# vX.Y.Z`
+comment on the line above (an inline comment pushes the line past yamllint's
+120 characters once the tag has a prerelease suffix). Inside the called
 workflow `github.workflow_sha` is that same commit, so Deploy checks this
 repository out at it and runs the provider actions from `.github/actions/` —
 no moving major tags anywhere.

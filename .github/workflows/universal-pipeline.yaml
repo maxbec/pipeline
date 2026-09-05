@@ -229,7 +229,10 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if gh api "repos/$REPO/branches/dev" --jq '.name' >/dev/null 2>&1; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
+          # Believe the name, not the status: GET /branches/dev has answered 200 with
+          # name "main" on a repository without a dev branch (navigaite/nvgt-trunk-plugin).
+          name=$(gh api "repos/$REPO/branches/dev" --jq '.name' 2>/dev/null || true)
+          if [[ "$name" == "dev" ]]; then echo "exists=true" >> "$GITHUB_OUTPUT"; else echo "exists=false" >> "$GITHUB_OUTPUT"; fi
 
       - name: Branch and title rules
         id: rules
@@ -349,10 +352,15 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # Visibility is not a proxy: a public repository can have the graph switched off and a
-        # private one can have it through GHAS. The SBOM endpoint answers 200 only when it is on.
+        # private one can have it through GHAS. Ask the compare endpoint the review action itself
+        # calls: it answers 200 only when the graph is on and, on a private repository, GHAS is
+        # licensed. (The SBOM endpoint answers 200 without GHAS and turned every private
+        # repository's first Check red.)
         run: |
-          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/compare/${BASE_SHA}...${HEAD_SHA}" --silent 2>/dev/null; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"

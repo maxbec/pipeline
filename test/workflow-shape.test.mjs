@@ -26,7 +26,12 @@ test("dependency review runs only when the repository's dependency graph answers
   const steps = wf().jobs.check.steps
   const probe = steps.find((s) => s.id === "depgraph")
   assert.ok(probe, "a probe step with id depgraph")
-  assert.match(probe.run, /dependency-graph\/sbom/)
+  // The SBOM endpoint answers 200 on a private repository without GHAS, where the
+  // review action then fails; the compare endpoint is what the action calls.
+  assert.match(probe.run, /dependency-graph\/compare\/\$\{BASE_SHA\}\.\.\.\$\{HEAD_SHA\}/)
+  assert.doesNotMatch(probe.run, /sbom/)
+  assert.match(String(probe.env?.BASE_SHA), /github\.event\.pull_request\.base\.sha/)
+  assert.match(String(probe.env?.HEAD_SHA), /github\.event\.pull_request\.head\.sha/)
   const review = steps.find((s) => String(s.uses ?? "").startsWith("actions/dependency-review-action@"))
   assert.match(String(review.if), /steps\.depgraph\.outputs\.available == 'true'/)
   assert.doesNotMatch(String(review.if), /repository\.private/, "visibility is not a proxy for graph availability")
@@ -67,7 +72,11 @@ test("the caller template pins by SHA, forwards the secrets and listens for rele
   assert.deepEqual(Object.keys(doc.jobs), ["pipeline"], "one job, so the context is `pipeline / Check`")
   const job = doc.jobs.pipeline
   assert.match(job.uses, /^maxbec\/pipeline\/\.github\/workflows\/universal-pipeline\.yaml@(__PIPELINE_SHA__|[0-9a-f]{40})$/)
-  assert.match(readFileSync(file, "utf8"), /universal-pipeline\.yaml@\S+ # (__PIPELINE_VERSION__|v\d+\.\d+\.\d+)/)
+  assert.match(
+    readFileSync(file, "utf8"),
+    /# (__PIPELINE_VERSION__|v\d+\.\d+\.\d+)\n\s*uses: maxbec\/pipeline\/\.github\/workflows\/universal-pipeline\.yaml@\S+\n/,
+    "the tag is a comment on the line above the sha, so the line stays under 120 characters",
+  )
   for (const s of [
     "CF_ACCESS_CLIENT_ID",
     "CF_ACCESS_CLIENT_SECRET",
