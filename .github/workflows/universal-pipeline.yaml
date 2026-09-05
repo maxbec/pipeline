@@ -341,21 +341,34 @@ jobs:
 
       # The dependency graph API needs a public repository or GHAS; private
       # repositories without it get a notice instead of a red Check.
-      - name: Dependency review
+      - name: Is the dependency graph available?
+        id: depgraph
         if: |
           needs.guard.outputs.security == 'true' && needs.guard.outputs.dependency-review == 'true' &&
-          github.event_name == 'pull_request' && github.event.repository.private == false
+          github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Visibility is not a proxy: a public repository can have the graph switched off and a
+        # private one can have it through GHAS. The SBOM endpoint answers 200 only when it is on.
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/dependency-graph/sbom" --silent 2>/dev/null; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Dependency review
+        if: steps.depgraph.outputs.available == 'true'
         uses: actions/dependency-review-action@9129d7d40b8c12c1ed0f60400d00c92d437adcce # v4.1.3
         with:
           fail-on-severity: ${{ needs.guard.outputs.fail-on-vulnerabilities == 'true' && 'moderate' || 'critical' }}
           warn-only: ${{ needs.guard.outputs.fail-on-vulnerabilities != 'true' }}
           comment-summary-in-pr: never
       - name: Dependency review unavailable
-        if: |
-          needs.guard.outputs.security == 'true' && needs.guard.outputs.dependency-review == 'true' &&
-          github.event_name == 'pull_request' && github.event.repository.private == true
+        if: steps.depgraph.outcome == 'success' && steps.depgraph.outputs.available != 'true'
         shell: bash
-        run: echo "::notice::Dependency review needs a public repository or GitHub Advanced Security; skipped."
+        run: |
+          echo "::notice::Dependency review skipped: this repository has no dependency graph (enable it under Settings > Security, or GHAS for private repositories)."
 
       - name: Set up pnpm (from packageManager)
         if: env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''

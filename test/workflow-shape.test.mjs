@@ -22,6 +22,18 @@ test("Check waits for Guard and runs on the configured runner", () => {
   assert.match(String(check.if), /github\.event_name != 'release'/)
 })
 
+test("dependency review runs only when the repository's dependency graph answers", () => {
+  const steps = doc.jobs.check.steps
+  const probe = steps.find((s) => s.id === "depgraph")
+  assert.ok(probe, "a probe step with id depgraph")
+  assert.match(probe.run, /dependency-graph\/sbom/)
+  const review = steps.find((s) => String(s.uses ?? "").startsWith("actions/dependency-review-action@"))
+  assert.match(String(review.if), /steps\.depgraph\.outputs\.available == 'true'/)
+  assert.doesNotMatch(String(review.if), /repository\.private/, "visibility is not a proxy for graph availability")
+  const notice = steps.find((s) => /Dependency review unavailable/.test(s.name ?? ""))
+  assert.match(String(notice.if), /steps\.depgraph\.outputs\.available != 'true'/)
+})
+
 test("Deploy fires only on a published release and never on a push", () => {
   const deploy = wf().jobs.deploy
   assert.match(String(deploy.if), /github\.event_name == 'release'/)

@@ -21,7 +21,7 @@ runner:
 security:
   enable: true
   trufflehog: true # verified secrets in the commit range; the pinned binary, no Docker needed
-  dependency_review: true # public repositories only; a private one without GHAS gets a notice
+  dependency_review: true # when the repository's dependency graph is on (public, or private with GHAS); otherwise a notice
   fail_on_secrets: true
   fail_on_vulnerabilities: false # true fails on moderate+, false warns
 
