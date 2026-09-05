@@ -23,7 +23,7 @@ test("Check waits for Guard and runs on the configured runner", () => {
 })
 
 test("dependency review runs only when the repository's dependency graph answers", () => {
-  const steps = doc.jobs.check.steps
+  const steps = wf().jobs.check.steps
   const probe = steps.find((s) => s.id === "depgraph")
   assert.ok(probe, "a probe step with id depgraph")
   assert.match(probe.run, /dependency-graph\/sbom/)
