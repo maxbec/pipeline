@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.0.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.0.0-beta.1...v5.0.0-beta.2) (2026-09-05)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** survive the first fleet run ([#80](https://github.com/maxbec/pipeline/issues/80)) ([96f570d](https://github.com/maxbec/pipeline/commit/96f570de5327dbbb4259474246af7a321f693ed0))
+
 ## [5.0.0-beta.1](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.14...v5.0.0-beta.1) (2026-09-05)
 
 
