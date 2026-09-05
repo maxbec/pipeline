@@ -510,7 +510,7 @@ jobs:
           retention-days: 7
 
   deploy:
-    name: Deploy${{ matrix.target.name != 'app' && format(' / {0}', matrix.target.name) || '' }}
+    name: Deploy (${{ matrix.target.name }})
     needs: guard
     if: github.event_name == 'release' && github.event.action == 'published' && needs.guard.outputs.deploy-provider != 'none'
     runs-on: ${{ fromJSON(needs.guard.outputs.runner) }}
