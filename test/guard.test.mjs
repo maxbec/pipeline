@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { runStep } from "./helpers.mjs"
+import { chmodSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+import { runStep, scratch } from "./helpers.mjs"
 
 const pr = (over = {}) => ({
   EVENT_NAME: "pull_request",
@@ -68,4 +70,17 @@ test("fork PRs never target main", () => {
 test("push and release events are not pull requests and pass through", () => {
   assert.equal(guard({ EVENT_NAME: "push" }).status, 0)
   assert.equal(guard({ EVENT_NAME: "release" }).status, 0)
+})
+
+test("the dev probe believes the branch name, not the status code", () => {
+  // GET /branches/dev answered 200 with name "main" on navigaite/nvgt-trunk-plugin
+  // (no dev branch), so the first fleet run refused a feature PR into main there.
+  const dir = scratch("gh-")
+  writeFileSync(join(dir, "gh"), '#!/usr/bin/env bash\n[[ "${FAKE_GH_EXIT:-0}" == 0 ]] || exit "$FAKE_GH_EXIT"\necho "$FAKE_GH_NAME"\n')
+  chmodSync(join(dir, "gh"), 0o755)
+  const probe = (env) =>
+    runStep("guard", "dev", { PATH: `${dir}:${process.env.PATH}`, REPO: "o/r", GH_TOKEN: "t", ...env })
+  assert.equal(probe({ FAKE_GH_NAME: "dev" }).outputs.exists, "true")
+  assert.equal(probe({ FAKE_GH_NAME: "main" }).outputs.exists, "false", "200 with another name is not a dev branch")
+  assert.equal(probe({ FAKE_GH_NAME: "", FAKE_GH_EXIT: "1" }).outputs.exists, "false")
 })
