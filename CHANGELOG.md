@@ -36,6 +36,98 @@
 
 * **pipeline:** slim the universal pipeline to Guard, Check and Deploy ([#76](https://github.com/maxbec/pipeline/issues/76)) ([a3a62a6](https://github.com/maxbec/pipeline/commit/a3a62a69b4f370db4a54096dc60c5f83f1b87d28))
 
+## [4.0.7](https://github.com/maxbec/pipeline/compare/v4.0.6...v4.0.7) (2026-08-27)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** call the composite actions at the v4 major tag ([#69](https://github.com/maxbec/pipeline/issues/69)) ([65339a3](https://github.com/maxbec/pipeline/commit/65339a39bbfc2d1d720888f99d163efa0e1291c5))
+
+## [4.0.6](https://github.com/maxbec/pipeline/compare/v4.0.5...v4.0.6) (2026-08-27)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** accept cloudflare-workers in the provider validation ([#65](https://github.com/maxbec/pipeline/issues/65)) ([e3aecb4](https://github.com/maxbec/pipeline/commit/e3aecb498439c7278b6ebbab3cc0ef803d13bcc0))
+
+## [4.0.5](https://github.com/maxbec/pipeline/compare/v4.0.4...v4.0.5) (2026-08-26)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** local buildx cache option, and stop trunk-upgrade merging ungated ([#58](https://github.com/maxbec/pipeline/issues/58)) ([0fe0acb](https://github.com/maxbec/pipeline/commit/0fe0acb6c865ee9c47ed4caa87018fe8979c859b))
+
+## [4.0.4](https://github.com/maxbec/pipeline/compare/v4.0.3...v4.0.4) (2026-08-22)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** realign dev with the commits that landed only on main ([#53](https://github.com/maxbec/pipeline/issues/53)) ([4acdfc3](https://github.com/maxbec/pipeline/commit/4acdfc3f23babb6e64ec46c1e55e78d1f79a3081))
+* **release:** align stable manifest with main at 4.0.3 ([#50](https://github.com/maxbec/pipeline/issues/50)) ([70c9e3e](https://github.com/maxbec/pipeline/commit/70c9e3eaa8ae3e2be4d210063e3da437821df5ff))
+* **release:** keep the release notes current on a red prerelease branch ([#55](https://github.com/maxbec/pipeline/issues/55)) ([3ec631b](https://github.com/maxbec/pipeline/commit/3ec631bf5ba2f038dce7fbbe69a5d9da94b27777))
+
+## [4.0.3](https://github.com/maxbec/pipeline/compare/v4.0.2...v4.0.3) (2026-08-21)
+
+
+### 🐛 Bug Fixes
+
+* **promote:** stop the promotion PR step dying with SIGPIPE ([#45](https://github.com/maxbec/pipeline/issues/45)) ([c22ccc5](https://github.com/maxbec/pipeline/commit/c22ccc584caa07977bd7c22841dbe7e1a5e8b3cc))
+
+## [4.0.2](https://github.com/maxbec/pipeline/compare/v4.0.1...v4.0.2) (2026-08-16)
+
+
+### 🐛 Bug Fixes
+
+* **release:** align the stable manifest with main at 4.0.1 ([#37](https://github.com/maxbec/pipeline/issues/37)) ([5563a65](https://github.com/maxbec/pipeline/commit/5563a6571315e35ce1048f77e1fddd27c8e550a0))
+
+## [4.0.1](https://github.com/maxbec/pipeline/compare/v4.0.0...v4.0.1) (2026-08-16)
+
+
+### 🐛 Bug Fixes
+
+* **deploy-vercel:** green deployments when the deploy succeeds ([#27](https://github.com/maxbec/pipeline/issues/27)) ([bfe487f](https://github.com/maxbec/pipeline/commit/bfe487f54eab508b75a27eb220b883bc44c5e83e))
+* **release:** re-fire the release PR's suppressed checks ([#33](https://github.com/maxbec/pipeline/issues/33)) ([2009d7b](https://github.com/maxbec/pipeline/commit/2009d7b73af67949cd79832fcea0b1e6efdf672f))
+* **release:** stop this repo auto-merging its own release PR into main ([#30](https://github.com/maxbec/pipeline/issues/30)) ([5739ea4](https://github.com/maxbec/pipeline/commit/5739ea463750473b5529adde87538258c4584ae4))
+* **sync-branches:** sign the reconcile commit ([#31](https://github.com/maxbec/pipeline/issues/31)) ([436dc1c](https://github.com/maxbec/pipeline/commit/436dc1c180d5a46509159481f7123ee6e55a4908))
+
+## [4.0.0](https://github.com/maxbec/pipeline/compare/v3.6.0...v4.0.0) (2026-08-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* **release:** repos that relied on the implicit true (any repo with a dev branch, or with deployment.provider: none) now leave the stable release PR open for a human. Set release.auto_release_merge: true to keep the old behaviour.
+
+### 🐛 Bug Fixes
+
+* **release:** never auto-merge into main by default ([#23](https://github.com/maxbec/pipeline/issues/23)) ([e37829d](https://github.com/maxbec/pipeline/commit/e37829dba64160978e85214c4469d5ac651def70))
+
+## [3.6.0](https://github.com/maxbec/pipeline/compare/v3.5.0...v3.6.0) (2026-08-15)
+
+
+### ✨ Features
+
+* **deploy-vercel:** inject APP_ENV into the build ([#17](https://github.com/maxbec/pipeline/issues/17)) ([d2a3ed9](https://github.com/maxbec/pipeline/commit/d2a3ed992ec95c54b4e46121ba8b6c5bfa955915))
+
+
+### 🐛 Bug Fixes
+
+* **promote:** resolve conflicts in the release manifests too ([#20](https://github.com/maxbec/pipeline/issues/20)) ([e1d1460](https://github.com/maxbec/pipeline/commit/e1d1460b883a34e3c2e30767519103648b8bd762))
+
+## [3.5.0](https://github.com/maxbec/pipeline/compare/v3.4.1...v3.5.0) (2026-08-14)
+
+
+### ✨ Features
+
+* one-button release — auto promotion PR, stable release PR auto-merge, back-merge wiring ([#10](https://github.com/maxbec/pipeline/issues/10)) ([3f85bf1](https://github.com/maxbec/pipeline/commit/3f85bf16bada04b37e62026b08c163f59b4a6cf1))
+* **scripts:** new-repo provisioning script (paved road for new repos) ([2ec280c](https://github.com/maxbec/pipeline/commit/2ec280ccda34790849af0071763bca1e9683f844))
+
+
+### 🐛 Bug Fixes
+
+* **flama:** rehome delivery contract to maxbec/pipeline ([#4](https://github.com/maxbec/pipeline/issues/4)) ([903497f](https://github.com/maxbec/pipeline/commit/903497f425d14e0523a6759900247ef9e9d78836))
+* **promote:** direct dev-head promotion PR when the merge is clean (auto mode) ([#12](https://github.com/maxbec/pipeline/issues/12)) ([99237a6](https://github.com/maxbec/pipeline/commit/99237a670e8ba57769f43639b6aa754443850a16))
+* **release:** decouple the dev beta release track from stable-track files ([#14](https://github.com/maxbec/pipeline/issues/14)) ([2b836e6](https://github.com/maxbec/pipeline/commit/2b836e6f6cb17b86421dcb8a936121541ae92fe5))
+
 ## [3.4.0](https://github.com/maxbec/pipeline) (2026-08-14)
 
 Stable promotion of the 3.3.0-beta line. Highlights:
