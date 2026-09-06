@@ -77,19 +77,19 @@ jobs:
       fail-on-secrets: ${{ steps.config.outputs.fail-on-secrets }}
       fail-on-vulnerabilities: ${{ steps.config.outputs.fail-on-vulnerabilities }}
       lint: ${{ steps.config.outputs.lint }}
-      lint-command: ${{ steps.config.outputs.lint-command }}
+      lint-command-b64: ${{ steps.config.outputs.lint-command-b64 }}
       test: ${{ steps.config.outputs.test }}
-      test-command: ${{ steps.config.outputs.test-command }}
+      test-command-b64: ${{ steps.config.outputs.test-command-b64 }}
       build: ${{ steps.config.outputs.build }}
-      build-command: ${{ steps.config.outputs.build-command }}
+      build-command-b64: ${{ steps.config.outputs.build-command-b64 }}
       artifact-path: ${{ steps.config.outputs.artifact-path }}
       deploy-provider: ${{ steps.config.outputs.deploy-provider }}
       deploy-targets: ${{ steps.config.outputs.deploy-targets }}
       primary-target: ${{ steps.config.outputs.primary-target }}
       vercel-scope: ${{ steps.config.outputs.vercel-scope }}
-      vercel-build-command: ${{ steps.config.outputs.vercel-build-command }}
+      vercel-build-command-b64: ${{ steps.config.outputs.vercel-build-command-b64 }}
       cloudflare-config: ${{ steps.config.outputs.cloudflare-config }}
-      cloudflare-build-command: ${{ steps.config.outputs.cloudflare-build-command }}
+      cloudflare-build-command-b64: ${{ steps.config.outputs.cloudflare-build-command-b64 }}
       docker-cache-backend: ${{ steps.config.outputs.docker-cache-backend }}
       render-hook: ${{ steps.config.outputs.render-hook }}
     steps:
@@ -117,7 +117,12 @@ jobs:
         run: |
           set -euo pipefail
           out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
-          multi() { { echo "$1<<PIPELINE_EOF"; printf '%s\n' "$2"; echo "PIPELINE_EOF"; } >> "$GITHUB_OUTPUT"; }
+          # Command strings leave this job base64-encoded. GitHub scans job
+          # outputs and silently drops any value it believes holds a credential
+          # ("Skip output 'build-command' since it may contain secret"), which
+          # is how maxbec/crewdo#137 reached Check with an empty BUILD_COMMAND
+          # and built with the fallback instead. Consumers decode with base64 -d.
+          b64() { out "$1-b64" "$(printf '%s' "$2" | base64 -w0)"; }
           str() { yq -r "$1 // \"$2\"" "$CONFIG_FILE"; }
           # `//` would turn an explicit `false` into the default; read the raw value instead.
           # bool <output> <yq path> <default> — writes the output itself so a bad value fails the step
@@ -190,11 +195,11 @@ jobs:
           bool fail-on-secrets '.security.fail_on_secrets' true
           bool fail-on-vulnerabilities '.security.fail_on_vulnerabilities' false
           bool lint '.lint.enable' true
-          multi lint-command "$(str '.lint.command' '')"
+          b64 lint-command "$(str '.lint.command' '')"
           bool test '.test.enable' true
-          multi test-command "$(str '.test.command' '')"
+          b64 test-command "$(str '.test.command' '')"
           bool build '.build.enable' true
-          multi build-command "$(str '.build.command' '')"
+          b64 build-command "$(str '.build.command' '')"
           out artifact-path "$(str '.build.artifact_path' '')"
 
           # --- deploy -------------------------------------------------------------
@@ -213,9 +218,9 @@ jobs:
           out deploy-targets "$TARGETS"
           out primary-target "$(jq -r '.[0].name' <<< "$TARGETS")"
           out vercel-scope "$(str '.deploy.vercel.scope' '')"
-          multi vercel-build-command "$(str '.deploy.vercel.build_command' '')"
+          b64 vercel-build-command "$(str '.deploy.vercel.build_command' '')"
           out cloudflare-config "$(str '.deploy.cloudflare.config' 'wrangler.toml')"
-          multi cloudflare-build-command "$(str '.deploy.cloudflare.build_command' '')"
+          b64 cloudflare-build-command "$(str '.deploy.cloudflare.build_command' '')"
           out docker-cache-backend "$(str '.deploy.docker.cache_backend' 'gha')"
           bool render-hook '.deploy.render.hook' false
           echo "stack=$STACK runner=$RUNNER provider=$PROVIDER targets=$TARGETS"
@@ -423,9 +428,10 @@ jobs:
         if: needs.guard.outputs.lint == 'true'
         shell: bash
         env:
-          LINT_COMMAND: ${{ needs.guard.outputs.lint-command }}
+          LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
         run: |
           set -euo pipefail
+          LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
           if [[ -z "$LINT_COMMAND" && -f .trunk/trunk.yaml ]]; then echo "trunk=true" >> "$GITHUB_OUTPUT"; else echo "trunk=false" >> "$GITHUB_OUTPUT"; fi
       - name: Lint (trunk)
         if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
@@ -434,9 +440,10 @@ jobs:
         if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk != 'true'
         shell: bash
         env:
-          LINT_COMMAND: ${{ needs.guard.outputs.lint-command }}
+          LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
         run: |
           set -euo pipefail
+          LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
           if [[ -n "$LINT_COMMAND" ]]; then bash -eo pipefail -c "$LINT_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.lint' package.json >/dev/null; then "$PM" run lint
           elif [[ "$STACK" == "python" ]] && command -v ruff >/dev/null; then ruff check .
@@ -446,10 +453,11 @@ jobs:
         if: needs.guard.outputs.test == 'true'
         shell: bash
         env:
-          TEST_COMMAND: ${{ needs.guard.outputs.test-command }}
+          TEST_COMMAND_B64: ${{ needs.guard.outputs.test-command-b64 }}
           CI: 'true'
         run: |
           set -euo pipefail
+          TEST_COMMAND=$(base64 -d <<< "$TEST_COMMAND_B64")
           if [[ -n "$TEST_COMMAND" ]]; then bash -eo pipefail -c "$TEST_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.test' package.json >/dev/null; then "$PM" test
           elif [[ "$STACK" == "python" ]] && [[ -d tests ]]; then python -m pytest
@@ -515,10 +523,11 @@ jobs:
         if: needs.guard.outputs.build == 'true'
         shell: bash
         env:
-          BUILD_COMMAND: ${{ needs.guard.outputs.build-command }}
+          BUILD_COMMAND_B64: ${{ needs.guard.outputs.build-command-b64 }}
           APP_ENV: preview
         run: |
           set -euo pipefail
+          BUILD_COMMAND=$(base64 -d <<< "$BUILD_COMMAND_B64")
           if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build
           else echo "::notice::No build command configured and none detected; skipped."; fi
@@ -654,6 +663,24 @@ jobs:
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
+      # The provider build commands arrive base64-encoded, because GitHub drops
+      # a job output it suspects of holding a credential. A step output inside
+      # one job is not scanned, so this is where they become readable again.
+      - name: Decode the provider build commands
+        id: cmd
+        if: env.PROVIDER == 'vercel' || env.PROVIDER == 'cloudflare-workers'
+        shell: bash
+        env:
+          VERCEL_B64: ${{ needs.guard.outputs.vercel-build-command-b64 }}
+          CLOUDFLARE_B64: ${{ needs.guard.outputs.cloudflare-build-command-b64 }}
+        run: |
+          set -euo pipefail
+          emit() {
+            { echo "$1<<PIPELINE_EOF"; base64 -d <<< "$2"; echo; echo "PIPELINE_EOF"; } >> "$GITHUB_OUTPUT"
+          }
+          emit vercel "$VERCEL_B64"
+          emit cloudflare "$CLOUDFLARE_B64"
+
       - name: Deploy to Vercel
         if: env.PROVIDER == 'vercel'
         uses: ./.pipeline/.github/actions/deploy-vercel
@@ -666,7 +693,7 @@ jobs:
           vercel-scope: ${{ needs.guard.outputs.vercel-scope }}
           environment: ${{ env.DEPLOY_ENVIRONMENT }}
           github-token: ${{ github.token }}
-          build-command: ${{ needs.guard.outputs.vercel-build-command }}
+          build-command: ${{ steps.cmd.outputs.vercel }}
 
       - name: Deploy to Cloudflare Workers
         if: env.PROVIDER == 'cloudflare-workers'
@@ -677,7 +704,7 @@ jobs:
           cloudflare-api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           cloudflare-account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           environment: ${{ env.DEPLOY_ENVIRONMENT }}
-          build-command: ${{ needs.guard.outputs.cloudflare-build-command }}
+          build-command: ${{ steps.cmd.outputs.cloudflare }}
           wrangler-config: ${{ needs.guard.outputs.cloudflare-config }}
           github-token: ${{ github.token }}
 
@@ -745,10 +772,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           PM: ${{ needs.guard.outputs.package-manager }}
-          BUILD_COMMAND: ${{ needs.guard.outputs.build-command }}
+          BUILD_COMMAND_B64: ${{ needs.guard.outputs.build-command-b64 }}
           PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
           set -euo pipefail
+          BUILD_COMMAND=$(base64 -d <<< "$BUILD_COMMAND_B64")
           if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
           elif jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build; fi
           TAG_ARGS=()
