@@ -103,3 +103,35 @@ test("this repository dogfoods the slim pipeline from its own tree", () => {
   assert.equal(String(config.version), "3")
   assert.equal(config.deploy.provider, "none")
 })
+
+test("no command string crosses the job boundary in plaintext", () => {
+  // GitHub scans job outputs and silently drops any it thinks holds a
+  // credential — "Skip output 'build-command' since it may contain secret."
+  // Nothing fails; the consumer just receives an empty string and falls back to
+  // a detected command (maxbec/crewdo#137). Every command output is therefore
+  // base64, and every consumer decodes it.
+  const text = readFileSync(WORKFLOW, "utf8")
+  const plaintext = [...text.matchAll(/needs\.guard\.outputs\.([\w-]*command)\b(?!-b64)/g)].map((m) => m[1])
+  assert.deepEqual(plaintext, [], "these outputs must be read as <name>-b64")
+  const encoded = new Set([...text.matchAll(/needs\.guard\.outputs\.([\w-]+-b64)\b/g)].map((m) => m[1]))
+  const declared = new Set(Object.keys(wf().jobs.guard.outputs))
+  for (const name of encoded) assert.ok(declared.has(name), `Guard does not declare ${name}`)
+  for (const name of declared) {
+    if (name.endsWith("-command")) assert.fail(`Guard still declares the plaintext output ${name}`)
+  }
+})
+
+test("every encoded command is decoded before it is run", () => {
+  const steps = [...wf().jobs.check.steps, ...wf().jobs.deploy.steps]
+  const consumers = steps.filter((s) =>
+    Object.values(s.env ?? {}).some((v) => /outputs\.[\w-]+-b64/.test(String(v))),
+  )
+  assert.ok(consumers.length >= 4, "the lint, test and build steps plus the deploy decoder")
+  for (const step of consumers) {
+    for (const key of Object.keys(step.env ?? {})) {
+      if (!key.endsWith("_B64")) continue
+      assert.match(String(step.run), /base64 -d/, `${step.name} decodes its commands`)
+      assert.ok(String(step.run).includes(`$${key}`), `${step.name} reads ${key}`)
+    }
+  }
+})

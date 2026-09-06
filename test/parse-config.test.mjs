@@ -10,6 +10,9 @@ function parse(config, env = {}) {
   return runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml", ...env })
 }
 
+/** Command outputs cross the job boundary base64-encoded; see the test below. */
+const command = (outputs, key) => Buffer.from(outputs[`${key}-b64`], "base64").toString()
+
 const minimal = `version: '3'\n`
 
 test("a minimal v3 config gets every default", () => {
@@ -91,15 +94,15 @@ build:
   assert.equal(r.outputs["node-version"], "26.8.1")
   assert.equal(r.outputs.trufflehog, "false")
   assert.equal(r.outputs["dependency-review"], "true")
-  assert.equal(r.outputs["lint-command"], "pnpm lint")
-  assert.equal(r.outputs["test-command"], "bash scripts/ci-test.sh")
+  assert.equal(command(r.outputs, "lint-command"), "pnpm lint")
+  assert.equal(command(r.outputs, "test-command"), "bash scripts/ci-test.sh")
   assert.equal(r.outputs.build, "false")
 })
 
 test("a multi-line build command survives as one output", () => {
   const r = parse(`version: '3'\nbuild:\n  command: |\n    set -a\n    pnpm build\n`)
   assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.outputs["build-command"], "set -a\npnpm build")
+  assert.equal(command(r.outputs, "build-command"), "set -a\npnpm build")
 })
 
 test("docker-ghcr images become the Deploy matrix, with the first image primary", () => {
@@ -133,11 +136,37 @@ test("vercel and cloudflare-workers carry their provider settings", () => {
   assert.equal(v.outputs["deploy-targets"], '[{"name":"app"}]')
   const c = parse(`version: '3'\ndeploy:\n  provider: cloudflare-workers\n  cloudflare:\n    config: wrangler.jsonc\n    build_command: npm run build\n`)
   assert.equal(c.outputs["cloudflare-config"], "wrangler.jsonc")
-  assert.equal(c.outputs["cloudflare-build-command"], "npm run build")
+  assert.equal(command(c.outputs, "cloudflare-build-command"), "npm run build")
 })
 
 test("an unknown provider is refused", () => {
   const r = parse(`version: '3'\ndeploy:\n  provider: digitalocean\n`)
   assert.equal(r.status, 1)
   assert.match(r.stdout + r.stderr, /::error::.*provider/)
+})
+
+test("command strings cross the job boundary base64-encoded", () => {
+  // GitHub scans job outputs and silently drops any it thinks holds a
+  // credential — "Skip output 'build-command' since it may contain secret."
+  // maxbec/crewdo#137 lost a build command that inlined CI dummy env vars this
+  // way: Guard wrote it, the Check job received an empty BUILD_COMMAND, and the
+  // fallback `pnpm run build` ran instead. Base64 keeps the value opaque.
+  const buildCommand =
+    "DATABASE_URL=postgres://u:p@localhost:5432/db BETTER_AUTH_SECRET=ci-secret-mit-mindestens-32-zeichen pnpm build"
+  const r = parse(`version: '3'\nbuild:\n  command: ${buildCommand}\n`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.outputs["build-command"], undefined, "the plaintext output is gone, not merely unused")
+  assert.equal(command(r.outputs, "build-command"), buildCommand)
+})
+
+test("every configured command is encoded, and an absent one stays empty", () => {
+  const r = parse(
+    `version: '3'\nlint:\n  command: pnpm lint\ntest:\n  command: |\n    pnpm test\n    pnpm test:e2e\ndeploy:\n  provider: vercel\n  vercel:\n    build_command: pnpm build:vercel\n`,
+  )
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(command(r.outputs, "lint-command"), "pnpm lint")
+  assert.equal(command(r.outputs, "test-command"), "pnpm test\npnpm test:e2e", "a block scalar keeps its line breaks")
+  assert.equal(command(r.outputs, "vercel-build-command"), "pnpm build:vercel")
+  assert.equal(command(r.outputs, "build-command"), "", "nothing configured decodes to nothing")
+  assert.equal(command(r.outputs, "cloudflare-build-command"), "")
 })
