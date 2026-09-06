@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.0.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.0-beta.2...v4.0.0-beta.1) (2026-09-06)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** carry command strings across the job boundary base64-encoded ([#83](https://github.com/maxbec/pipeline/issues/83)) ([def9cdf](https://github.com/maxbec/pipeline/commit/def9cdfa57c1ef478788e0a279e0e442c403c1d1))
+
 ## [5.0.0](https://github.com/maxbec/pipeline/compare/v4.0.7...v5.0.0) (2026-09-06)
 
 
