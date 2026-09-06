@@ -1,5 +1,41 @@
 # Changelog
 
+## [5.0.0](https://github.com/maxbec/pipeline/compare/v4.0.7...v5.0.0) (2026-09-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pipeline:** `.github/pipeline.yaml` must be version 3; callers forward secrets by name and use the single `pipeline` job; the required status context is `pipeline / Check`; deploys are triggered by published releases, never by pushes.
+
+
+### ✨ Features
+
+* **pipeline:** slim the universal pipeline to Guard, Check and Deploy ([#76](https://github.com/maxbec/pipeline/issues/76)) ([a3a62a6](https://github.com/maxbec/pipeline/commit/a3a62a69b4f370db4a54096dc60c5f83f1b87d28))
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** survive the first fleet run ([#80](https://github.com/maxbec/pipeline/issues/80)) ([96f570d](https://github.com/maxbec/pipeline/commit/96f570de5327dbbb4259474246af7a321f693ed0))
+
+## [5.0.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.0.0-beta.1...v5.0.0-beta.2) (2026-09-05)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** survive the first fleet run ([#80](https://github.com/maxbec/pipeline/issues/80)) ([96f570d](https://github.com/maxbec/pipeline/commit/96f570de5327dbbb4259474246af7a321f693ed0))
+
+## [5.0.0-beta.1](https://github.com/maxbec/pipeline/compare/v4.0.0-beta.14...v5.0.0-beta.1) (2026-09-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pipeline:** `.github/pipeline.yaml` must be version 3; callers forward secrets by name and use the single `pipeline` job; the required status context is `pipeline / Check`; deploys are triggered by published releases, never by pushes.
+
+
+### ✨ Features
+
+* **pipeline:** slim the universal pipeline to Guard, Check and Deploy ([#76](https://github.com/maxbec/pipeline/issues/76)) ([a3a62a6](https://github.com/maxbec/pipeline/commit/a3a62a69b4f370db4a54096dc60c5f83f1b87d28))
+
 ## [4.0.7](https://github.com/maxbec/pipeline/compare/v4.0.6...v4.0.7) (2026-08-27)
 
 

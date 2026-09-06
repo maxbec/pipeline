@@ -1,25 +1,11 @@
-# Navigaite CI/CD — Documentation
-
-## Guides
+# Pipeline — documentation
 
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](./GETTING_STARTED.md) | 5-minute setup for new projects |
-| [Configuration Reference](./CONFIGURATION.md) | Full `.github/pipeline.yaml` options |
-| [Branching Strategy](./BRANCHING_STRATEGY.md) | main/dev workflow, hotfixes, releases |
-| [Versioning Guide](./VERSIONING_GUIDE.md) | Semantic versioning + conventional commits |
-| [Auto Sync Feature](./AUTO_SYNC_FEATURE.md) | Post-release main → dev sync |
-| [GitHub Settings Guide](./GITHUB_SETTINGS_GUIDE.md) | Repo & org configuration |
-| [Self-Hosted Runner](./SELF_HOSTED_RUNNER.md) | Hardened homelab runner — protects the Actions budget |
-| [Actions Marketplace](./GITHUB_ACTIONS_MARKETPLACE.md) | Curated actions used in the pipeline |
+| [Configuration reference](./CONFIGURATION.md) | Every key of `.github/pipeline.yaml` version 3, and what each job does with it |
+| [Self-hosted runner](./SELF_HOSTED_RUNNER.md) | The hardened homelab runner behind `PIPELINE_RUNNER` |
+| [Org maintenance](./ORG_MAINTENANCE.md) | Dependabot and Trunk upgrade bootstrap across an org |
 
-## Examples
-
-See [`.github/config/examples/`](../.github/config/examples/) for ready-to-use configurations:
-
-- [Next.js + Vercel](../.github/config/examples/nextjs-vercel-pipeline.yaml)
-- [Python + DigitalOcean](../.github/config/examples/python-digitalocean-pipeline.yaml)
-- [Flutter](../.github/config/examples/flutter-pipeline.yaml)
-- [Docker Only](../.github/config/examples/docker-only-pipeline.yaml)
-- [npm Library](../.github/config/examples/library-npm-pipeline.yaml)
-- [WordPress Theme](../.github/config/examples/wordpress-theme-pipeline.yaml)
+The caller every repository carries is `.github/workflows/examples/caller.yaml`.
+Versioning, release PRs, tags, release notes and promotion are Flaiky's
+(`maxbec/flaiky`), not this repository's.

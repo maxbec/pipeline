@@ -4,9 +4,9 @@ This repo bootstraps three kinds of automatic upkeep into every `navigaite` org 
 
 1. **Dependabot** for the `github-actions` ecosystem (third-party action version bumps).
 2. **`trunk upgrade`** on a weekly schedule, staggered per repo, auto-merging after CI.
-3. **Claude Code caller** — a thin workflow that defines triggers, gating, and permissions, then delegates execution to the reusable `claude-code.yaml` here in `navigaite/.github`. Replaces any inline copy; future filter/diagnostic changes land via `v2` retag, not a per-repo edit.
+3. ~~Claude Code caller~~ — retired 2026-09: Flaiky's Issue Worker and review stages replaced the `@claude` workflows; the reusable `claude-code.yaml` no longer exists.
 
-It does **not** manage bumps of the reusable pipeline itself — consumers pin `navigaite/.github/...@v2`, and `release.yaml` retargets `v2` on every release. That gives zero-maintenance patch updates without producing a PR on every change.
+It does **not** manage bumps of the reusable pipeline itself — consumers pin `maxbec/pipeline/...@<sha>`, and `provisioning/migrate-repos.ts` in `maxbec/flaiky` repins the whole fleet after a release.
 
 ## Architecture
 

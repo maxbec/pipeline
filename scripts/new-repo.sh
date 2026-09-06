@@ -6,7 +6,7 @@
 # Automates everything GitHub-side that the template cannot carry:
 #   repo from nvgt-repo-template, dev as default branch, merge-method settings,
 #   auto-merge, branch rulesets (dev=squash, main=merge), Actions allowlist
-#   safety, and prints the manual checklist (Infisical, Vercel, Flama).
+#   safety, and prints the manual checklist (Infisical, Vercel, Flaiky).
 set -euo pipefail
 REPO="${1:?usage: new-repo.sh <org>/<name> [--public]}"
 VIS="--private"; [ "${2:-}" = "--public" ] && VIS="--public"
@@ -50,9 +50,9 @@ echo "==> 5/7 Actions allowlist safety"
 mode=$(gh api "repos/$REPO/actions/permissions" --jq .allowed_actions)
 if [ "$mode" = "selected" ]; then
   cur=$(gh api "repos/$REPO/actions/permissions/selected-actions")
-  echo "$cur" | jq '.patterns_allowed += ["maxbec/pipeline/*","maxbec/flama-delivery-platform/*"] | .patterns_allowed |= unique' \
+  echo "$cur" | jq '.patterns_allowed += ["maxbec/pipeline/*"] | .patterns_allowed |= unique' \
     | gh api -X PUT "repos/$REPO/actions/permissions/selected-actions" --input - \
-    && echo "    allowlist patched (maxbec/pipeline/*, flama)"
+    && echo "    allowlist patched (maxbec/pipeline/*)"
 else
   echo "    mode=$mode — nothing to patch (silent startup_failure trap avoided)"
 fi
@@ -72,8 +72,8 @@ cat <<EOF
     [ ] Vercel (if deploying): create project, set repo secrets
         VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID; set
         deployment.provider: vercel + vercel.scope in .github/pipeline.yaml
-    [ ] Flama consumer onboarding:
-        node ~/.paperclip/scripts/flama-migrate.mjs $REPO <platform-sha> <version> apply
+    [ ] Put the repository on the slim pipeline and register it in Flaiky:
+        node provisioning/migrate-repos.ts --only $REPO --apply   (in maxbec/flaiky)
     [ ] Adjust .github/pipeline.yaml (stack, runtime, test/build commands)
 EOF
 echo "DONE — $REPO is on the paved road."
