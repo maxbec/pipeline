@@ -49,7 +49,7 @@ On merge of the bootstrap PR, the consumer repo gets:
 - **Weekly Monday morning Dependabot PR** grouping all `github-actions` bumps. Review + merge manually.
 - **Weekly `trunk upgrade` PR** on the repo's assigned day. Auto-merges after CI.
 
-Neither touches `.release-please-manifest.json`, `package.json`, or anything outside `.github/`.
+Neither touches `package.json`, a version file, or anything outside `.github/`.
 
 ## Troubleshooting
 
