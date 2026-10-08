@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.0.2](https://github.com/maxbec/pipeline/compare/v5.0.1...v5.0.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** check the pipeline out at job.workflow_sha, not github.workflow_sha ([#87](https://github.com/maxbec/pipeline/issues/87)) ([a722bac](https://github.com/maxbec/pipeline/commit/a722bac9688115d24f627f4741adb2eb4f856fc7))
+
+## [5.0.1](https://github.com/maxbec/pipeline/compare/v5.0.0...v5.0.1) (2026-09-06)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** carry command strings across the job boundary base64-encoded ([#83](https://github.com/maxbec/pipeline/issues/83)) ([def9cdf](https://github.com/maxbec/pipeline/commit/def9cdfa57c1ef478788e0a279e0e442c403c1d1))
+
 ## [5.0.2-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.1...v5.0.2-beta.1) (2026-10-08)
 
 
