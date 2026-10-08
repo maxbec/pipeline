@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { runStep } from "./helpers.mjs"
+import { join } from "node:path"
+import { ROOT, runStep, yaml } from "./helpers.mjs"
 
 const meta = (env) =>
   runStep("deploy", "meta", {
@@ -33,4 +34,15 @@ test("an explicit image name wins and extra build args are appended", () => {
   const r = meta({ IMAGE_NAME_OVERRIDE: "maxbec/platzl", EXTRA_BUILD_ARGS: "NODE_ENV=production" })
   assert.equal(r.outputs["image-name"], "maxbec/platzl")
   assert.match(r.outputs["build-args"], /NODE_ENV=production/)
+})
+
+test("a release never builds a SHA tag prefixed with an empty branch", () => {
+  // Deploy runs on a published release, which checks out a tag: {{branch}} is
+  // empty there, and an ungated `prefix={{branch}}-` gives "-<sha>" (crewsy
+  // v0.35.0-beta.1, 2026-10-08: buildx "invalid reference format").
+  const action = yaml(join(ROOT, ".github/actions/deploy-docker/action.yaml"))
+  const meta = action.runs.steps.find((s) => s.id === "meta")
+  for (const line of meta.with.tags.split("\n").filter((l) => l.includes("{{branch}}"))) {
+    assert.match(line, /enable=\$\{\{ github\.ref_type == 'branch' \}\}/, line)
+  }
 })
