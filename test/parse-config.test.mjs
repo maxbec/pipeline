@@ -139,6 +139,16 @@ test("vercel and cloudflare-workers carry their provider settings", () => {
   assert.equal(command(c.outputs, "cloudflare-build-command"), "npm run build")
 })
 
+test("a vercel preview alias passes through and must be a hostname", () => {
+  const ok = parse(`version: '3'\ndeploy:\n  provider: vercel\n  vercel:\n    preview_alias: my-app-dev.vercel.app\n`)
+  assert.equal(ok.status, 0, ok.stderr)
+  assert.equal(ok.outputs["vercel-preview-alias"], "my-app-dev.vercel.app")
+  assert.equal(parse(minimal).outputs["vercel-preview-alias"], "", "no alias unless configured")
+  const bad = parse(`version: '3'\ndeploy:\n  provider: vercel\n  vercel:\n    preview_alias: https://my-app-dev.vercel.app\n`)
+  assert.equal(bad.status, 1)
+  assert.match(bad.stdout + bad.stderr, /::error::.*preview_alias/)
+})
+
 test("an unknown provider is refused", () => {
   const r = parse(`version: '3'\ndeploy:\n  provider: digitalocean\n`)
   assert.equal(r.status, 1)

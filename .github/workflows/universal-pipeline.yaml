@@ -90,6 +90,7 @@ jobs:
       deploy-targets: ${{ steps.config.outputs.deploy-targets }}
       primary-target: ${{ steps.config.outputs.primary-target }}
       vercel-scope: ${{ steps.config.outputs.vercel-scope }}
+      vercel-preview-alias: ${{ steps.config.outputs.vercel-preview-alias }}
       vercel-build-command-b64: ${{ steps.config.outputs.vercel-build-command-b64 }}
       cloudflare-config: ${{ steps.config.outputs.cloudflare-config }}
       cloudflare-build-command-b64: ${{ steps.config.outputs.cloudflare-build-command-b64 }}
@@ -222,6 +223,11 @@ jobs:
           out deploy-targets "$TARGETS"
           out primary-target "$(jq -r '.[0].name' <<< "$TARGETS")"
           out vercel-scope "$(str '.deploy.vercel.scope' '')"
+          PREVIEW_ALIAS=$(str '.deploy.vercel.preview_alias' '')
+          if [[ -n "$PREVIEW_ALIAS" && ! "$PREVIEW_ALIAS" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; then
+            echo "::error::deploy.vercel.preview_alias '$PREVIEW_ALIAS' is not a hostname (e.g. my-app-dev.vercel.app)."; exit 1
+          fi
+          out vercel-preview-alias "$PREVIEW_ALIAS"
           b64 vercel-build-command "$(str '.deploy.vercel.build_command' '')"
           out cloudflare-config "$(str '.deploy.cloudflare.config' 'wrangler.toml')"
           b64 cloudflare-build-command "$(str '.deploy.cloudflare.build_command' '')"
@@ -584,6 +590,29 @@ jobs:
       - name: Checkout the released commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Flaiky releases a commit SHA, so the checkout is a detached HEAD and
+      # `vercel deploy` records the branch as "HEAD". Put the branch the release
+      # came from back on that commit: a prerelease is cut from dev (main in a
+      # repository without one), a stable release from main.
+      - name: Name the released branch
+        id: branch
+        if: env.PROVIDER == 'vercel'
+        shell: bash
+        env:
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          set -euo pipefail
+          if [[ "$PRERELEASE" == "true" ]]; then CANDIDATES=(dev main); else CANDIDATES=(main); fi
+          for BRANCH in "${CANDIDATES[@]}"; do
+            if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+              git checkout -q -B "$BRANCH"
+              echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+              echo "Deploying the release from $BRANCH"
+              exit 0
+            fi
+          done
+          echo "::warning::None of ${CANDIDATES[*]} exists on origin; the deployment's branch stays HEAD."
+
       # The provider actions, at exactly the commit this workflow was pinned to.
       - name: Checkout the pipeline's actions
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -708,6 +737,7 @@ jobs:
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
           vercel-scope: ${{ needs.guard.outputs.vercel-scope }}
+          preview-alias: ${{ needs.guard.outputs.vercel-preview-alias }}
           environment: ${{ env.DEPLOY_ENVIRONMENT }}
           github-token: ${{ github.token }}
           build-command: ${{ steps.cmd.outputs.vercel }}
