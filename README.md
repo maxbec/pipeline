@@ -10,6 +10,16 @@ commit.
 | **Check** | pull requests and pushes to `dev` / `main` | secret scan, dependency review, lint, test, build in one job on the configured runner. `pipeline / Check` is the single required status check |
 | **Deploy** | a **published release** only | prerelease → `preview`, stable → `production`; Vercel, Cloudflare Workers, Docker to GHCR (plus an optional Render hook), npm |
 
+**A Release PR reuses its base's Check.** Flaiky rebuilds the Release PR on
+every merge into its base, as the base tip plus one commit that writes the
+version and `CHANGELOG.md`. Guard compares that head with the base tip. Check
+stands down when four things hold: the head is exactly that one commit, every
+changed line outside the changelog only swaps a version for the one the title
+`chore(release): X` names, and the base tip's own push run is green. It then
+reports that run's result on a hosted runner in seconds and leaves the
+configured runner free. Anything else runs the full Check, and so does an API
+that does not answer. That is why the caller grants `actions: read`.
+
 Nothing here versions, tags or writes release notes: [Flaiky](https://github.com/maxbec/flaiky)
 keeps the Release PR, merges it on approval, tags, publishes the GitHub release
 and thereby triggers Deploy (ADR 0003 / 0004 there).

@@ -65,6 +65,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read # the reuse step asks whether the base tip's push run is green
     outputs:
       stack: ${{ steps.config.outputs.stack }}
       node-version: ${{ steps.config.outputs.node-version }}
@@ -96,6 +97,12 @@ jobs:
       cloudflare-build-command-b64: ${{ steps.config.outputs.cloudflare-build-command-b64 }}
       docker-cache-backend: ${{ steps.config.outputs.docker-cache-backend }}
       render-hook: ${{ steps.config.outputs.render-hook }}
+      reuse: ${{ steps.reuse.outputs.reuse == 'true' }}
+      reuse-base-sha: ${{ steps.reuse.outputs.base-sha }}
+      # A reused Check needs no tooling, so it does not queue for the
+      # configured runner — often one self-hosted box that the work it saves
+      # would otherwise occupy.
+      check-runner: ${{ steps.reuse.outputs.reuse == 'true' && '["ubuntu-latest"]' || steps.config.outputs.runner }}
     steps:
       - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -291,11 +298,82 @@ jobs:
           fi
           echo "✅ '$PR_TITLE' from $PR_HEAD into $PR_BASE is allowed"
 
+      # A Release PR is the base tip plus one commit that writes the version and
+      # the changelog. Flaiky rebuilds it on every merge into the base, so
+      # checking it again re-runs lint, test and build on a tree the base's own
+      # push run has already passed — on a single self-hosted runner that is ten
+      # minutes of queue per merge. When the head is exactly that one commit,
+      # every changed line outside CHANGELOG.md only swaps a version for the one
+      # the title names, and the base tip's push run is green, Check reports the
+      # base's result instead of recomputing it. Anything else, an API error
+      # included, runs the full Check: this step can only ever say "the same as".
+      - name: Is this a Release PR over a green base?
+        id: reuse
+        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
+          [[ "$PR_HEAD_REPO" == "$REPO" ]] || full "the head lives in another repository"
+          SEMVER='[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z][A-Za-z0-9]*(\.[0-9]+)?)?'
+          [[ "$PR_TITLE" =~ ^chore\(release\):\ ($SEMVER)$ ]] || full "'$PR_TITLE' does not name a release version"
+          VERSION="${BASH_REMATCH[1]}"
+          compare=$(mktemp)
+          gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA" > "$compare" 2>/dev/null || full "the compare API did not answer"
+          verdict=$(VERSION="$VERSION" COMPARE="$compare" python3 - 2>&1 <<'PY'
+          import json, os, re, sys
+          c = json.load(open(os.environ["COMPARE"]))
+          v = os.environ["VERSION"]
+          if c.get("status") != "ahead" or c.get("ahead_by") != 1 or c.get("behind_by") != 0:
+              sys.exit("the head is not exactly one commit over the base tip")
+          sem = re.compile(r"v?\d+\.\d+\.\d+(?:-[A-Za-z][A-Za-z0-9]*(?:\.\d+)?)?")
+          def bumped(old, new):
+              # One version token of `old` became v, on a line that declares a
+              # version or holds nothing else; a dependency range never passes.
+              for m in sem.finditer(old):
+                  pre, post = old[: m.start()], old[m.end() :]
+                  lead = "v" if m.group(0).startswith("v") else ""
+                  if new != pre + lead + v + post:
+                      continue
+                  if re.search(r"\bversion\b", pre, re.I) or (pre + post).strip() == "":
+                      return True
+              return False
+          for f in c.get("files", []):
+              name, status = f["filename"], f.get("status")
+              if name == "CHANGELOG.md" and status in ("modified", "added"):
+                  continue
+              if status != "modified" or "patch" not in f:
+                  sys.exit(name + " is " + str(status) + ", not a version edit")
+              minus, plus = [], []
+              for line in f["patch"].split("\n"):
+                  if line.startswith("-"):
+                      minus.append(line[1:])
+                  elif line.startswith("+"):
+                      plus.append(line[1:])
+              if len(minus) != len(plus) or not all(bumped(o, n) for o, n in zip(minus, plus)):
+                  sys.exit(name + " changes more than its version")
+          PY
+          ) || full "$verdict"
+          runs=$(gh api "repos/$REPO/actions/runs?head_sha=$BASE_SHA&event=push&branch=$BASE_REF&per_page=20" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \
+            || full "the runs API did not answer"
+          [[ "$runs" =~ ^[1-9] ]] || full "$BASE_REF at ${BASE_SHA:0:7} has no green push run of the pipeline yet"
+          { echo "reuse=true"; echo "base-sha=$BASE_SHA"; } >> "$GITHUB_OUTPUT"
+          echo "Reusing the Check of $BASE_REF at ${BASE_SHA:0:7}: the head only writes $VERSION and the changelog."
+
   check:
     name: Check
     needs: guard
     if: github.event_name != 'release'
-    runs-on: ${{ fromJSON(needs.guard.outputs.runner) }}
+    runs-on: ${{ fromJSON(needs.guard.outputs.check-runner) }}
     timeout-minutes: 45
     permissions:
       contents: read
@@ -305,15 +383,33 @@ jobs:
     env:
       STACK: ${{ needs.guard.outputs.stack }}
       PM: ${{ needs.guard.outputs.package-manager }}
+      # Guard found a Release PR whose tree is the green base tip plus the
+      # version and the changelog: every step below stands down and the job
+      # reports the base's result, on a hosted runner, in seconds.
+      REUSE: ${{ needs.guard.outputs.reuse }}
     steps:
+      - name: Reuse the base's Check
+        if: env.REUSE == 'true'
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ needs.guard.outputs.reuse-base-sha }}
+        run: |
+          set -euo pipefail
+          msg="Lint, test and build passed on $BASE_REF at ${BASE_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
+          echo "::notice::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
       # /tmp is noexec on the hardened rootless homelab runners; tooling that
       # mktemp+execs (esbuild, swc, native modules) needs an exec-capable tmp.
       # No-op on GitHub-hosted runners.
       - name: Route tmp to the runner workdir
+        if: env.REUSE != 'true'
         shell: bash
         run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Checkout
+        if: env.REUSE != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # trufflehog scans the commit range
@@ -321,7 +417,7 @@ jobs:
       # TruffleHog runs as the pinned binary, not the container action: the
       # homelab runners are rootless with no Docker socket.
       - name: Secret scan
-        if: needs.guard.outputs.security == 'true' && needs.guard.outputs.trufflehog == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.security == 'true' && needs.guard.outputs.trufflehog == 'true'
         shell: bash
         env:
           TRUFFLEHOG_VERSION: v3.93.4
@@ -362,6 +458,7 @@ jobs:
       - name: Is the dependency graph available?
         id: depgraph
         if: |
+          env.REUSE != 'true' &&
           needs.guard.outputs.security == 'true' && needs.guard.outputs.dependency-review == 'true' &&
           github.event_name == 'pull_request'
         shell: bash
@@ -381,40 +478,40 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Dependency review
-        if: steps.depgraph.outputs.available == 'true'
+        if: env.REUSE != 'true' && steps.depgraph.outputs.available == 'true'
         uses: actions/dependency-review-action@9129d7d40b8c12c1ed0f60400d00c92d437adcce # v4.1.3
         with:
           fail-on-severity: ${{ needs.guard.outputs.fail-on-vulnerabilities == 'true' && 'moderate' || 'critical' }}
           warn-only: ${{ needs.guard.outputs.fail-on-vulnerabilities != 'true' }}
           comment-summary-in-pr: never
       - name: Dependency review unavailable
-        if: steps.depgraph.outcome == 'success' && steps.depgraph.outputs.available != 'true'
+        if: env.REUSE != 'true' && steps.depgraph.outcome == 'success' && steps.depgraph.outputs.available != 'true'
         shell: bash
         run: |
           echo "::notice::Dependency review skipped: this repository has no dependency graph (enable it under Settings > Security, or GHAS for private repositories)."
 
       - name: Set up pnpm (from packageManager)
-        if: env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - name: Set up pnpm (latest)
-        if: env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: ${{ needs.guard.outputs.pnpm-version }}
       - name: Set up Node.js
-        if: env.STACK == 'nodejs'
+        if: env.REUSE != 'true' && env.STACK == 'nodejs'
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
           cache: ${{ needs.guard.outputs.cache }}
       - name: Set up Python
-        if: env.STACK == 'python'
+        if: env.REUSE != 'true' && env.STACK == 'python'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ needs.guard.outputs.python-version }}
 
       - name: Install dependencies
-        if: env.STACK != 'none'
+        if: env.REUSE != 'true' && env.STACK != 'none'
         shell: bash
         run: |
           set -euo pipefail
@@ -435,7 +532,7 @@ jobs:
 
       - name: Which linter?
         id: linter
-        if: needs.guard.outputs.lint == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true'
         shell: bash
         env:
           LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
@@ -444,10 +541,10 @@ jobs:
           LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
           if [[ -z "$LINT_COMMAND" && -f .trunk/trunk.yaml ]]; then echo "trunk=true" >> "$GITHUB_OUTPUT"; else echo "trunk=false" >> "$GITHUB_OUTPUT"; fi
       - name: Lint (trunk)
-        if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
         uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
       - name: Lint
-        if: needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk != 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk != 'true'
         shell: bash
         env:
           LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
@@ -461,7 +558,7 @@ jobs:
 
       - name: Test
         id: test
-        if: needs.guard.outputs.test == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.test == 'true'
         shell: bash
         env:
           TEST_COMMAND_B64: ${{ needs.guard.outputs.test-command-b64 }}
@@ -491,7 +588,7 @@ jobs:
       # not hard-fail a compile-only build: probe first, skip with a warning.
       - name: Infisical for the build
         id: infisical
-        if: needs.guard.outputs.build == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.build == 'true'
         shell: bash
         env:
           INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID }}
@@ -515,7 +612,7 @@ jobs:
             echo "::warning::Infisical at $INFISICAL_DOMAIN answered '${code:-000} ${type:-none}' (an Access redirect or an outage); building without secrets."
           fi
       - name: Load Infisical secrets (OIDC)
-        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
+        if: env.REUSE != 'true' && steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: oidc
@@ -528,7 +625,7 @@ jobs:
             CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       - name: Load Infisical secrets (Universal Auth)
-        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
+        if: env.REUSE != 'true' && steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
         uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
         with:
           method: universal
@@ -543,7 +640,7 @@ jobs:
             CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       - name: Build
-        if: needs.guard.outputs.build == 'true'
+        if: env.REUSE != 'true' && needs.guard.outputs.build == 'true'
         shell: bash
         env:
           BUILD_COMMAND_B64: ${{ needs.guard.outputs.build-command-b64 }}
@@ -555,7 +652,7 @@ jobs:
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build
           else echo "::notice::No build command configured and none detected; skipped."; fi
       - name: Upload build artifact
-        if: needs.guard.outputs.build == 'true' && needs.guard.outputs.artifact-path != ''
+        if: env.REUSE != 'true' && needs.guard.outputs.build == 'true' && needs.guard.outputs.artifact-path != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: build-${{ github.sha }}
