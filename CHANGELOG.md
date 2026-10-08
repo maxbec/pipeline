@@ -1,5 +1,22 @@
 # Changelog
 
+## [5.1.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0-beta.1) (2026-10-08)
+
+
+### ✨ Features
+
+* **check:** upload test artifacts when the test step fails ([#95](https://github.com/maxbec/pipeline/issues/95)) ([da89087](https://github.com/maxbec/pipeline/commit/da8908785ef6d3aee129e1f4e6b3c436c705c0e6))
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** check the pipeline out at job.workflow_sha, not github.workflow_sha ([#87](https://github.com/maxbec/pipeline/issues/87)) ([2dd2237](https://github.com/maxbec/pipeline/commit/2dd223785e5fbb952cbb5fd95c082703d04d4018))
+
+
+### 📝 Documentation
+
+* **org-maintenance:** drop the release-please manifest from the list of untouched files ([#94](https://github.com/maxbec/pipeline/issues/94)) ([adaecee](https://github.com/maxbec/pipeline/commit/adaecee5d70917344e7dacc1ace0d9107078c53e))
+
 ## [5.0.2](https://github.com/maxbec/pipeline/compare/v5.0.1...v5.0.2) (2026-10-08)
 
 
