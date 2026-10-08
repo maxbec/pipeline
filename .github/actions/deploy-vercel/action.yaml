@@ -20,6 +20,11 @@ inputs:
     required: false
     default: ''
 
+  preview-alias:
+    description: Hostname pointed at every preview deployment, so the preview keeps one URL
+    required: false
+    default: ''
+
   environment:
     description: Deployment environment (preview, staging, production)
     required: true
@@ -268,6 +273,37 @@ runs:
         fi
 
         echo "::endgroup::"
+
+    # A preview deployment gets a new generated hostname each time; the alias
+    # is the one URL that always shows the latest preview. A stable release
+    # needs none: `--target production` assigns the production domains.
+    - name: Point the preview alias at this deployment
+      if: inputs.preview-alias != '' && inputs.environment == 'preview'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        VERCEL_TOKEN: ${{ inputs.vercel-token }}
+        VERCEL_SCOPE: ${{ inputs.vercel-scope }}
+        VERCEL_ORG_ID: ${{ inputs.vercel-org-id }}
+        VERCEL_PROJECT_ID: ${{ inputs.vercel-project-id }}
+        DEPLOY_URL: ${{ steps.deploy.outputs.deployment-url }}
+        PREVIEW_ALIAS: ${{ inputs.preview-alias }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$DEPLOY_URL" ]]; then
+          echo "::error::No deployment URL to alias; $PREVIEW_ALIAS still points at the previous preview."
+          exit 1
+        fi
+        SCOPE_ARG=()
+        if [[ -n "$VERCEL_SCOPE" ]]; then SCOPE_ARG=(--scope="$VERCEL_SCOPE"); fi
+        DEPLOYMENT="${DEPLOY_URL#https://}"
+        DEPLOYMENT="${DEPLOYMENT%/}"
+        vercel alias set "$DEPLOYMENT" "$PREVIEW_ALIAS" --token="$VERCEL_TOKEN" "${SCOPE_ARG[@]}"
+        {
+          echo "### 🔗 Preview alias"
+          echo ""
+          echo "[https://$PREVIEW_ALIAS](https://$PREVIEW_ALIAS) → \`$DEPLOYMENT\`"
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Create GitHub Deployment
       if: inputs.github-token != ''
