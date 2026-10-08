@@ -16,9 +16,12 @@ test("the universal pipeline is exactly Guard, Check and Deploy", () => {
 })
 
 test("Check waits for Guard and runs on the configured runner", () => {
-  const check = wf().jobs.check
+  const doc = wf()
+  const check = doc.jobs.check
   assert.ok([].concat(check.needs).includes("guard"))
-  assert.match(String(check["runs-on"]), /needs\.guard\.outputs\.runner/)
+  // check-runner is the configured runner unless Guard reuses the base's Check.
+  assert.match(String(check["runs-on"]), /needs\.guard\.outputs\.check-runner/)
+  assert.match(doc.jobs.guard.outputs["check-runner"], /\|\| steps\.config\.outputs\.runner \}\}$/)
   assert.match(String(check.if), /github\.event_name != 'release'/)
 })
 
@@ -155,4 +158,24 @@ test("test artifacts are uploaded right after a failed Test step, never on succe
   assert.match(String(upload.with.name), /github\.run_attempt/, "v4 artifacts are immutable; a re-run must not 409")
   assert.equal(upload.with["if-no-files-found"], "ignore")
   assert.equal(upload.with["retention-days"], 7)
+})
+
+test("a reused Check runs nothing but its notice, on a hosted runner", () => {
+  // Guard sets `reuse` only for a Release PR whose tree is the green base tip
+  // plus the version and the changelog. A step that forgot the gate would run
+  // on the runner with no checkout or no toolchain and turn the check red.
+  const doc = yaml(WORKFLOW)
+  const check = doc.jobs.check
+  assert.equal(check.env.REUSE, "${{ needs.guard.outputs.reuse }}")
+  assert.equal(check["runs-on"], "${{ fromJSON(needs.guard.outputs.check-runner) }}")
+  assert.match(doc.jobs.guard.outputs["check-runner"], /reuse == 'true' && '\["ubuntu-latest"\]' \|\| steps\.config\.outputs\.runner/)
+  const [notice, ...rest] = check.steps
+  assert.equal(notice.if, "env.REUSE == 'true'")
+  for (const step of rest) {
+    const cond = String(step.if ?? "")
+    assert.ok(
+      cond.startsWith("env.REUSE != 'true'") || /steps\.test\.outcome == 'failure'/.test(cond),
+      `step "${step.name}" runs on a reused Check: if: ${cond || "(none)"}`,
+    )
+  }
 })
