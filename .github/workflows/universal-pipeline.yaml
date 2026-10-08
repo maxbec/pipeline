@@ -16,7 +16,9 @@
 # secrets do not cross the owner boundary. Behaviour is configured only through
 # the caller's .github/pipeline.yaml. The provider actions are taken from this
 # repository at the very same commit: inside a called workflow
-# `github.workflow_sha` is the reusable workflow's own SHA.
+# `job.workflow_sha` is the reusable workflow's own commit. `github.workflow_sha`
+# is the caller's — measured 2026-10-08, when the first release deploy on v5.0.1
+# fetched maxbec/pipeline at the caller's SHA and died with "not our ref".
 name: Pipeline
 
 on:
@@ -572,7 +574,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: maxbec/pipeline
-          ref: ${{ github.workflow_sha }}
+          ref: ${{ job.workflow_sha }}
           path: .pipeline
           sparse-checkout: .github/actions
 
