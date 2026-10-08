@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.1.0](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0) (2026-10-08)
+
+
+### ✨ Features
+
+* **deploy:** name the release branch for Vercel and keep a stable preview alias ([#96](https://github.com/maxbec/pipeline/issues/96)) ([c388a48](https://github.com/maxbec/pipeline/commit/c388a4806466b99125e054c8a831d1fed9adb3b4))
+* **check:** upload test artifacts when the test step fails ([#95](https://github.com/maxbec/pipeline/issues/95)) ([da89087](https://github.com/maxbec/pipeline/commit/da8908785ef6d3aee129e1f4e6b3c436c705c0e6))
+
+
+### 📝 Documentation
+
+* **org-maintenance:** drop the release-please manifest from the list of untouched files ([#94](https://github.com/maxbec/pipeline/issues/94)) ([adaecee](https://github.com/maxbec/pipeline/commit/adaecee5d70917344e7dacc1ace0d9107078c53e))
+
 ## [5.1.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0-beta.1) (2026-10-08)
 
 
@@ -853,3 +866,4 @@ Stable promotion of the 3.3.0-beta line. Highlights:
 * **workflows:** replace sub-setup workflow with new setup action ([977bda1](https://github.com/navigaite/.github/commit/977bda160ca422afe34f1075778dbd05b8f8baaf))
 * **workflows:** update Vercel deployment action and standardize naming conventions ([f903b79](https://github.com/navigaite/.github/commit/f903b796a5667fc3a91340e04ef2497e9123b93a))
 * **workflows:** use double quotes for consistency in run-name and PR_PREVIEW_DOMAIN ([ec343aa](https://github.com/navigaite/.github/commit/ec343aaa4e06917ee9c78f1b7a31f448a7e2573c))
+
