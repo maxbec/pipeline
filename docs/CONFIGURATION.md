@@ -32,6 +32,7 @@ lint:
 test:
   enable: true
   command: '' # default: `<pm> test` if the script exists; python: `pytest` when tests/ exists
+  artifact_path: '' # optional: uploaded as test-artifacts-<run>-<attempt> for 7 days, only when the tests fail
 
 build:
   enable: true
@@ -43,6 +44,7 @@ deploy:
   vercel:
     scope: '' # team slug
     build_command: ''
+    preview_alias: '' # e.g. my-app-dev.vercel.app: pointed at every preview deployment
   cloudflare:
     config: wrangler.toml
     build_command: ''
@@ -80,6 +82,12 @@ a stable release deploys `production`. Pushes never deploy.
 | `cloudflare-workers` | `wrangler deploy --env preview` | `wrangler deploy` |
 | `docker-ghcr` | pushes `:<version>` and `:dev` | pushes `:<version>` and `:latest`, then the Render hook if enabled |
 | `npm` | `npm publish --tag next` | `npm publish` |
+
+A Vercel deploy checks the release out on its branch (`dev` for a prerelease,
+`main` in a repository without one or for a stable release), so Vercel records
+that branch rather than a detached `HEAD`. With `deploy.vercel.preview_alias`
+set, every preview deployment is then aliased to that hostname: one URL that
+always shows the latest preview.
 
 Deploys read secrets from Infisical's `preview` or `production` environment
 (`vars.INFISICAL_PREVIEW_ENV_SLUG` / `vars.INFISICAL_PROD_ENV_SLUG` override
