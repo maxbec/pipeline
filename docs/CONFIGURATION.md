@@ -32,6 +32,7 @@ lint:
 test:
   enable: true
   command: '' # default: `<pm> test` if the script exists; python: `pytest` when tests/ exists
+  artifact_path: '' # optional: uploaded as test-artifacts-<run>-<attempt> for 7 days, only when the tests fail
 
 build:
   enable: true

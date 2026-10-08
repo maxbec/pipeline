@@ -82,6 +82,7 @@ jobs:
       lint-command-b64: ${{ steps.config.outputs.lint-command-b64 }}
       test: ${{ steps.config.outputs.test }}
       test-command-b64: ${{ steps.config.outputs.test-command-b64 }}
+      test-artifact-path: ${{ steps.config.outputs.test-artifact-path }}
       build: ${{ steps.config.outputs.build }}
       build-command-b64: ${{ steps.config.outputs.build-command-b64 }}
       artifact-path: ${{ steps.config.outputs.artifact-path }}
@@ -200,6 +201,7 @@ jobs:
           b64 lint-command "$(str '.lint.command' '')"
           bool test '.test.enable' true
           b64 test-command "$(str '.test.command' '')"
+          out test-artifact-path "$(str '.test.artifact_path' '')"
           bool build '.build.enable' true
           b64 build-command "$(str '.build.command' '')"
           out artifact-path "$(str '.build.artifact_path' '')"
@@ -452,6 +454,7 @@ jobs:
           else echo "::notice::No lint command configured and none detected; skipped."; fi
 
       - name: Test
+        id: test
         if: needs.guard.outputs.test == 'true'
         shell: bash
         env:
@@ -464,6 +467,18 @@ jobs:
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.test' package.json >/dev/null; then "$PM" test
           elif [[ "$STACK" == "python" ]] && [[ -d tests ]]; then python -m pytest
           else echo "::notice::No test command configured and none detected; skipped."; fi
+      # Whatever the tests leave behind (Playwright traces, screenshots, reports)
+      # is only worth keeping when they failed. The attempt is part of the name
+      # because v4 artifacts are immutable and a failed Check is the one that
+      # gets re-run.
+      - name: Upload test artifacts
+        if: failure() && steps.test.outcome == 'failure' && needs.guard.outputs.test-artifact-path != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-artifacts-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ needs.guard.outputs.test-artifact-path }}
+          if-no-files-found: ignore
+          retention-days: 7
 
       # Build-time secrets come from Infisical's preview environment (CI never
       # reads production). A transient Infisical outage or an Access gate must

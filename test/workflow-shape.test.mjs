@@ -135,3 +135,24 @@ test("every encoded command is decoded before it is run", () => {
     }
   }
 })
+
+test("test artifacts are uploaded right after a failed Test step, never on success", () => {
+  // navigaite/crewsy keeps Playwright traces with `retain-on-failure`; without
+  // this step a flake could only be read from the job log.
+  const doc = wf()
+  assert.equal(doc.jobs.guard.outputs["test-artifact-path"], "${{ steps.config.outputs.test-artifact-path }}")
+  const steps = doc.jobs.check.steps
+  const testIndex = steps.findIndex((s) => s.name === "Test")
+  assert.equal(steps[testIndex].id, "test", "the upload step reads the Test step's outcome by id")
+  const upload = steps[testIndex + 1]
+  assert.equal(upload.name, "Upload test artifacts", "directly after Test, before Infisical and Build")
+  assert.match(String(upload.if), /^failure\(\) && /, "runs only after a failure, never on a green job")
+  assert.match(String(upload.if), /steps\.test\.outcome == 'failure'/, "a failed lint or install does not count")
+  assert.match(String(upload.if), /needs\.guard\.outputs\.test-artifact-path != ''/)
+  const build = steps.find((s) => s.name === "Upload build artifact")
+  assert.equal(upload.uses, build.uses, "same upload-artifact pin as the build artifact")
+  assert.match(String(upload.with.path), /needs\.guard\.outputs\.test-artifact-path/)
+  assert.match(String(upload.with.name), /github\.run_attempt/, "v4 artifacts are immutable; a re-run must not 409")
+  assert.equal(upload.with["if-no-files-found"], "ignore")
+  assert.equal(upload.with["retention-days"], 7)
+})

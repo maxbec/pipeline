@@ -170,3 +170,14 @@ test("every configured command is encoded, and an absent one stays empty", () =>
   assert.equal(command(r.outputs, "build-command"), "", "nothing configured decodes to nothing")
   assert.equal(command(r.outputs, "cloudflare-build-command"), "")
 })
+
+test("artifact paths pass through as plain outputs and default to empty", () => {
+  const none = parse(minimal)
+  assert.equal(none.status, 0, none.stderr)
+  assert.equal(none.outputs["artifact-path"], "", "no build artifact unless configured")
+  assert.equal(none.outputs["test-artifact-path"], "", "no test artifact unless configured")
+  const r = parse(`version: '3'\ntest:\n  artifact_path: test-results\nbuild:\n  artifact_path: dist/**\n`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.outputs["test-artifact-path"], "test-results")
+  assert.equal(r.outputs["artifact-path"], "dist/**")
+})
