@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.2.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0-beta.1) (2026-10-08)
+
+
+### ✨ Features
+
+* **check:** reuse the base's Check for a Release PR that only writes the version ([#99](https://github.com/maxbec/pipeline/issues/99)) ([90b0267](https://github.com/maxbec/pipeline/commit/90b02676f1d8290e20b543badd2009f9dac82c9d))
+
 ## [5.1.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0-beta.1) (2026-10-08)
 
 
