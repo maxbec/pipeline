@@ -36,7 +36,7 @@ scripts/                                    repo bootstrap and org maintenance h
   context `pipeline / Check` is the single required status check everywhere.
 - **Deploy** (`needs: guard`, only `release: published`, provider ≠ none). A
   matrix over `deploy-targets` (one leg per Docker image, one leg named `app`
-  otherwise). Checks out `maxbec/pipeline` at `github.workflow_sha` into
+  otherwise). Checks out `maxbec/pipeline` at `job.workflow_sha` into
   `.pipeline/` and runs the provider actions from there — the same commit the
   caller pinned, no moving tags. Prerelease → `preview`, stable → `production`.
 
