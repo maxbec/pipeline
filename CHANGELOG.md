@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.2.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.2.0-beta.1...v5.2.0-beta.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** no SHA tag with an empty branch prefix on a release ([#101](https://github.com/maxbec/pipeline/issues/101)) ([4b5cbd2](https://github.com/maxbec/pipeline/commit/4b5cbd285536952d32f2bb247ec00948da963fbb))
+
 ## [5.2.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0-beta.1) (2026-10-08)
 
 
