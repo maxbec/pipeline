@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.2.0](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0) (2026-10-09)
+
+
+### ✨ Features
+
+* **check:** reuse the base's Check for a Release PR that only writes the version ([#99](https://github.com/maxbec/pipeline/issues/99)) ([90b0267](https://github.com/maxbec/pipeline/commit/90b02676f1d8290e20b543badd2009f9dac82c9d))
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** no SHA tag with an empty branch prefix on a release ([#101](https://github.com/maxbec/pipeline/issues/101)) ([4b5cbd2](https://github.com/maxbec/pipeline/commit/4b5cbd285536952d32f2bb247ec00948da963fbb))
+
 ## [5.1.0](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0) (2026-10-08)
 
 
@@ -880,3 +892,4 @@ Stable promotion of the 3.3.0-beta line. Highlights:
 * **workflows:** replace sub-setup workflow with new setup action ([977bda1](https://github.com/navigaite/.github/commit/977bda160ca422afe34f1075778dbd05b8f8baaf))
 * **workflows:** update Vercel deployment action and standardize naming conventions ([f903b79](https://github.com/navigaite/.github/commit/f903b796a5667fc3a91340e04ef2497e9123b93a))
 * **workflows:** use double quotes for consistency in run-name and PR_PREVIEW_DOMAIN ([ec343aa](https://github.com/navigaite/.github/commit/ec343aaa4e06917ee9c78f1b7a31f448a7e2573c))
+
