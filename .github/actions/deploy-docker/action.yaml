@@ -159,17 +159,18 @@ runs:
       uses: docker/metadata-action@318604b99e75e41977312d83839a89be02ca4893 # v5.9.0
       with:
         images: ${{ steps.registry-config.outputs.registry-url }}/${{ inputs.image-name }}
-        # A release checks out a tag: {{branch}} is empty there and the SHA tag
-        # would be "-<sha>", which buildx rejects. Only branch builds get one.
+        # Deploy is the only caller and runs on a published release, which
+        # checks out a tag: branch, PR and default-branch rules never fire
+        # there, and {{branch}} is empty (a "-<sha>" tag aborts buildx, crewsy
+        # v0.35.0-beta.1). So: the version, its channel (dev/latest), and
+        # <major>.<minor>, which metadata-action skips for a prerelease.
+        # `latest=false` keeps the channel decision with the caller.
+        flavor: |
+          latest=false
         tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=sha,prefix={{branch}}-,enable=${{ github.ref_type == 'branch' }}
           type=raw,value=${{ inputs.image-tag }}
           type=raw,value=${{ inputs.version-tag }},enable=${{ inputs.version-tag != '' }}
-          type=raw,value=latest,enable={{is_default_branch}}
+          type=semver,pattern={{major}}.{{minor}}
 
     - name: Build and Push Docker Image
       id: build
