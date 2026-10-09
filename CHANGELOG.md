@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.1.0](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0) (2026-10-08)
+
+
+### ✨ Features
+
+* **deploy:** name the release branch for Vercel and keep a stable preview alias ([#96](https://github.com/maxbec/pipeline/issues/96)) ([c388a48](https://github.com/maxbec/pipeline/commit/c388a4806466b99125e054c8a831d1fed9adb3b4))
+* **check:** upload test artifacts when the test step fails ([#95](https://github.com/maxbec/pipeline/issues/95)) ([da89087](https://github.com/maxbec/pipeline/commit/da8908785ef6d3aee129e1f4e6b3c436c705c0e6))
+
+
+### 📝 Documentation
+
+* **org-maintenance:** drop the release-please manifest from the list of untouched files ([#94](https://github.com/maxbec/pipeline/issues/94)) ([adaecee](https://github.com/maxbec/pipeline/commit/adaecee5d70917344e7dacc1ace0d9107078c53e))
+
 ## [5.2.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.2.0-beta.1...v5.2.0-beta.2) (2026-10-08)
 
 
