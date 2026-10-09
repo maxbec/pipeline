@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.2.0](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0) (2026-10-09)
+
+
+### ✨ Features
+
+* **check:** reuse the base's Check for a Release PR that only writes the version ([#99](https://github.com/maxbec/pipeline/issues/99)) ([90b0267](https://github.com/maxbec/pipeline/commit/90b02676f1d8290e20b543badd2009f9dac82c9d))
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** no SHA tag with an empty branch prefix on a release ([#101](https://github.com/maxbec/pipeline/issues/101)) ([4b5cbd2](https://github.com/maxbec/pipeline/commit/4b5cbd285536952d32f2bb247ec00948da963fbb))
+
 ## [5.1.0](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0) (2026-10-08)
 
 
@@ -12,6 +24,20 @@
 ### 📝 Documentation
 
 * **org-maintenance:** drop the release-please manifest from the list of untouched files ([#94](https://github.com/maxbec/pipeline/issues/94)) ([adaecee](https://github.com/maxbec/pipeline/commit/adaecee5d70917344e7dacc1ace0d9107078c53e))
+
+## [5.2.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.2.0-beta.1...v5.2.0-beta.2) (2026-10-08)
+
+
+### 🐛 Bug Fixes
+
+* **deploy:** no SHA tag with an empty branch prefix on a release ([#101](https://github.com/maxbec/pipeline/issues/101)) ([4b5cbd2](https://github.com/maxbec/pipeline/commit/4b5cbd285536952d32f2bb247ec00948da963fbb))
+
+## [5.2.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0-beta.1) (2026-10-08)
+
+
+### ✨ Features
+
+* **check:** reuse the base's Check for a Release PR that only writes the version ([#99](https://github.com/maxbec/pipeline/issues/99)) ([90b0267](https://github.com/maxbec/pipeline/commit/90b02676f1d8290e20b543badd2009f9dac82c9d))
 
 ## [5.1.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.0.2...v5.1.0-beta.1) (2026-10-08)
 
