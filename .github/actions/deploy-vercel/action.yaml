@@ -307,7 +307,7 @@ runs:
 
     - name: Create GitHub Deployment
       if: inputs.github-token != ''
-      uses: chrnorm/deployment-action@55729fcebec3d284f60f5bcabbd8376437d696b1 # v2.0.7
+      uses: chrnorm/deployment-action@500aa6a23c81ffa1acf71072aee3cfa2cc2e556a # v2.0.8
       id: github-deployment
       with:
         token: ${{ inputs.github-token }}
@@ -322,7 +322,7 @@ runs:
     # second red X that hid the real failure.
     - name: Update Deployment Status
       if: always() && inputs.github-token != '' && steps.github-deployment.outputs.deployment_id != ''
-      uses: chrnorm/deployment-status@9a72af4586197112e0491ea843682b5dc280d806 # v2.0.3
+      uses: chrnorm/deployment-status@6df8d036fd2fee9eb82936733953da1f8382b41e # v2.0.4
       with:
         token: ${{ inputs.github-token }}
         deployment-id: ${{ steps.github-deployment.outputs.deployment_id }}
