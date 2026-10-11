@@ -49,6 +49,28 @@ test("the stack and toolchain are detected from the tree when not configured", (
   assert.equal(again.outputs["pnpm-version"], "latest", "no packageManager field: install the latest pnpm")
 })
 
+test("a devEngines.packageManager pin is left to pnpm/action-setup, like packageManager", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "pipeline.yaml"), minimal)
+  writeFileSync(join(dir, "pnpm-lock.yaml"), "")
+  const pnpmVersion = (manifest) => {
+    writeFileSync(join(dir, "package.json"), JSON.stringify(manifest))
+    const r = runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml" })
+    assert.equal(r.status, 0, r.stderr)
+    return r.outputs["pnpm-version"]
+  }
+  // The action reads devEngines.packageManager before packageManager (v6.0.7+); passing
+  // `version: latest` over it would install a pnpm the manifest does not allow.
+  assert.equal(pnpmVersion({ devEngines: { packageManager: { name: "pnpm", version: "^11.0.0" } } }), "")
+  assert.equal(
+    pnpmVersion({ devEngines: { packageManager: { name: "pnpm", version: "11.0.0" } }, packageManager: "pnpm@11.0.0" }),
+    "",
+  )
+  assert.equal(pnpmVersion({ devEngines: { packageManager: { name: "pnpm" } } }), "latest", "a name without a version pins nothing")
+  assert.equal(pnpmVersion({ devEngines: { packageManager: { name: "npm", version: "10.0.0" } } }), "latest")
+  assert.equal(pnpmVersion({ packageManager: "yarn@4.0.0" }), "latest")
+})
+
 test("a boolean that is not a boolean is a configuration error", () => {
   const r = parse(`version: '3'\nlint:\n  enable: yes please\n`)
   assert.equal(r.status, 1)

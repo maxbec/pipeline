@@ -189,8 +189,12 @@ jobs:
           fi
           out package-manager "${PM:-npm}"
           out cache "$CACHE"
+          # pnpm/action-setup reads a pin from devEngines.packageManager first, then packageManager;
+          # ask for the latest pnpm only when the manifest pins neither.
           PNPM_VERSION=""
-          if [[ "$PM" == "pnpm" && "$(jq -r '.packageManager // ""' package.json 2>/dev/null)" != pnpm@* ]]; then PNPM_VERSION=latest; fi
+          if [[ "$PM" == "pnpm" ]] && ! jq -e '(.packageManager // "" | tostring | startswith("pnpm@"))
+              or (.devEngines.packageManager | type == "object" and .name == "pnpm" and (.version // "") != "")' \
+              package.json >/dev/null 2>&1; then PNPM_VERSION=latest; fi
           out pnpm-version "$PNPM_VERSION"
 
           RUNNER=$(yq -o=json -I=0 '.runner.labels // []' "$CONFIG_FILE" | jq -c '.')
@@ -490,20 +494,27 @@ jobs:
         run: |
           echo "::notice::Dependency review skipped: this repository has no dependency graph (enable it under Settings > Security, or GHAS for private repositories)."
 
-      - name: Set up pnpm (from packageManager)
-        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-      - name: Set up pnpm (latest)
-        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        with:
-          version: ${{ needs.guard.outputs.pnpm-version }}
+      # Node before pnpm: pnpm/action-setup v6 bootstraps pnpm with `npm ci`, taking npm from
+      # PATH, and a self-hosted runner's system Node may have none (the homelab images had Node 18
+      # and no npm, 2026-10-11). setup-node's `cache: pnpm` needs pnpm on PATH, so pnpm caches its
+      # own store instead.
       - name: Set up Node.js
         if: env.REUSE != 'true' && env.STACK == 'nodejs'
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache }}
+          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
+      - name: Set up pnpm (from package.json)
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+      - name: Set up pnpm (latest)
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ needs.guard.outputs.pnpm-version }}
+          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Set up Python
         if: env.REUSE != 'true' && env.STACK == 'python'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -729,21 +740,25 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "Deploying $TAG to $DEPLOY_ENVIRONMENT"
 
-      - name: Set up pnpm (from packageManager)
-        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version == ''
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-      - name: Set up pnpm (latest)
-        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version != ''
-        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
-        with:
-          version: ${{ needs.guard.outputs.pnpm-version }}
+      # Node before pnpm, for the npm pnpm/action-setup bootstraps with; see Check.
       - name: Set up Node.js
         if: env.PROVIDER != 'docker-ghcr'
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache }}
+          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
           registry-url: https://registry.npmjs.org
+      - name: Set up pnpm (from package.json)
+        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version == ''
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+      - name: Set up pnpm (latest)
+        if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version != ''
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: ${{ needs.guard.outputs.pnpm-version }}
+          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Install dependencies
         if: env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm'
         shell: bash

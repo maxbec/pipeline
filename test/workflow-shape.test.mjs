@@ -179,3 +179,29 @@ test("a reused Check runs nothing but its notice, on a hosted runner", () => {
     )
   }
 })
+
+test("Node is set up before pnpm, and pnpm caches its own store", () => {
+  // pnpm/action-setup v6 bootstraps pnpm with `npm ci`, taking npm from PATH. The homelab
+  // runner images carried Node 18 and no npm (2026-10-11), so setup-node has to come first,
+  // and its `cache: pnpm` (which needs pnpm on PATH) gives way to the action's own `cache`.
+  for (const job of ["check", "deploy"]) {
+    const steps = wf().jobs[job].steps
+    const node = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/setup-node@"))
+    const pnpm = steps.flatMap((s, i) => (String(s.uses ?? "").startsWith("pnpm/action-setup@") ? [i] : []))
+    assert.equal(pnpm.length, 2, `${job}: one pnpm step for a packageManager pin, one for the latest`)
+    for (const i of pnpm) {
+      assert.ok(node < i, `${job}: "${steps[i].name}" runs before setup-node`)
+      assert.match(steps[i].uses, /@[0-9a-f]{40}$/, `${job}: SHA-pinned`)
+      assert.match(readFileSync(WORKFLOW, "utf8"), new RegExp(`${steps[i].uses} # v6\\.\\d+\\.\\d+\\n`), "a v6 release")
+      assert.equal(steps[i].with.cache, "${{ needs.guard.outputs.cache == 'pnpm' }}")
+    }
+    const [pinned, latest] = pnpm.map((i) => steps[i])
+    assert.equal(pinned.with.version, undefined, `${job}: version next to packageManager throws`)
+    assert.equal(latest.with.version, "${{ needs.guard.outputs.pnpm-version }}")
+    assert.equal(
+      steps[node].with.cache,
+      "${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}",
+      `${job}: setup-node caches npm and yarn only`,
+    )
+  }
+})
