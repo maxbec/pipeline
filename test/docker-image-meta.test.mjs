@@ -36,13 +36,18 @@ test("an explicit image name wins and extra build args are appended", () => {
   assert.match(r.outputs["build-args"], /NODE_ENV=production/)
 })
 
-test("a release never builds a SHA tag prefixed with an empty branch", () => {
+test("the image tags are only rules a release can produce", () => {
   // Deploy runs on a published release, which checks out a tag: {{branch}} is
-  // empty there, and an ungated `prefix={{branch}}-` gives "-<sha>" (crewsy
-  // v0.35.0-beta.1, 2026-10-08: buildx "invalid reference format").
+  // empty there, and `prefix={{branch}}-` gave "-<sha>" (crewsy v0.35.0-beta.1,
+  // 2026-10-08: buildx "invalid reference format"). Branch, PR and
+  // default-branch rules never fire on a tag, so none belong here.
   const action = yaml(join(ROOT, ".github/actions/deploy-docker/action.yaml"))
   const meta = action.runs.steps.find((s) => s.id === "meta")
-  for (const line of meta.with.tags.split("\n").filter((l) => l.includes("{{branch}}"))) {
-    assert.match(line, /enable=\$\{\{ github\.ref_type == 'branch' \}\}/, line)
-  }
+  const rules = meta.with.tags.split("\n").map((l) => l.trim()).filter(Boolean)
+  assert.deepEqual(rules, [
+    "type=raw,value=${{ inputs.image-tag }}",
+    "type=raw,value=${{ inputs.version-tag }},enable=${{ inputs.version-tag != '' }}",
+    "type=semver,pattern={{major}}.{{minor}}",
+  ])
+  assert.equal(meta.with.flavor.trim(), "latest=false")
 })

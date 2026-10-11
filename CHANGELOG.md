@@ -1,5 +1,31 @@
 # Changelog
 
+## [5.2.1](https://github.com/maxbec/pipeline/compare/v5.2.0...v5.2.1) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** move remaining actions off Node 20 ([#107](https://github.com/maxbec/pipeline/issues/107)) ([09e38be](https://github.com/maxbec/pipeline/commit/09e38be2d0240753ccfb1832b87ea786e9bb684d))
+* **deploy:** move deployment actions off Node 20 ([#106](https://github.com/maxbec/pipeline/issues/106)) ([82735ff](https://github.com/maxbec/pipeline/commit/82735ffc754d9c565fe54d3511b93c081d294fae))
+
+
+### ♻️ Refactoring
+
+* **docker:** only the image tags a release can produce ([#105](https://github.com/maxbec/pipeline/issues/105)) ([156c747](https://github.com/maxbec/pipeline/commit/156c747864bc6cc08165494c4344e4de946a51fa))
+
+## [5.2.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.2.0...v5.2.1-beta.1) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **ci:** move remaining actions off Node 20 ([#107](https://github.com/maxbec/pipeline/issues/107)) ([09e38be](https://github.com/maxbec/pipeline/commit/09e38be2d0240753ccfb1832b87ea786e9bb684d))
+* **deploy:** move deployment actions off Node 20 ([#106](https://github.com/maxbec/pipeline/issues/106)) ([82735ff](https://github.com/maxbec/pipeline/commit/82735ffc754d9c565fe54d3511b93c081d294fae))
+
+
+### ♻️ Refactoring
+
+* **docker:** only the image tags a release can produce ([#105](https://github.com/maxbec/pipeline/issues/105)) ([156c747](https://github.com/maxbec/pipeline/commit/156c747864bc6cc08165494c4344e4de946a51fa))
+
 ## [5.2.0](https://github.com/maxbec/pipeline/compare/v5.1.0...v5.2.0) (2026-10-09)
 
 
@@ -892,4 +918,3 @@ Stable promotion of the 3.3.0-beta line. Highlights:
 * **workflows:** replace sub-setup workflow with new setup action ([977bda1](https://github.com/navigaite/.github/commit/977bda160ca422afe34f1075778dbd05b8f8baaf))
 * **workflows:** update Vercel deployment action and standardize naming conventions ([f903b79](https://github.com/navigaite/.github/commit/f903b796a5667fc3a91340e04ef2497e9123b93a))
 * **workflows:** use double quotes for consistency in run-name and PR_PREVIEW_DOMAIN ([ec343aa](https://github.com/navigaite/.github/commit/ec343aaa4e06917ee9c78f1b7a31f448a7e2573c))
-
