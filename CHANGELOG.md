@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.2.2](https://github.com/maxbec/pipeline/compare/v5.2.1...v5.2.2) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **check:** set up Node before pnpm and move to pnpm/action-setup v6.1.0 ([#110](https://github.com/maxbec/pipeline/issues/110)) ([cd0ab6f](https://github.com/maxbec/pipeline/commit/cd0ab6f898ce7bd9324246823a774ae67aed839b))
+
+## [5.2.2-beta.1](https://github.com/maxbec/pipeline/compare/v5.2.1...v5.2.2-beta.1) (2026-10-11)
+
+
+### 🐛 Bug Fixes
+
+* **check:** set up Node before pnpm and move to pnpm/action-setup v6.1.0 ([#110](https://github.com/maxbec/pipeline/issues/110)) ([cd0ab6f](https://github.com/maxbec/pipeline/commit/cd0ab6f898ce7bd9324246823a774ae67aed839b))
+
 ## [5.2.1](https://github.com/maxbec/pipeline/compare/v5.2.0...v5.2.1) (2026-10-11)
 
 
