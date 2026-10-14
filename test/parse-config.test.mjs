@@ -213,3 +213,20 @@ test("artifact paths pass through as plain outputs and default to empty", () => 
   assert.equal(r.outputs["test-artifact-path"], "test-results")
   assert.equal(r.outputs["artifact-path"], "dist/**")
 })
+
+test("runtime.dependency_cache: false leaves a store that outlives the job alone", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@11.0.0" }))
+  writeFileSync(join(dir, "pnpm-lock.yaml"), "")
+  const cache = (config) => {
+    writeFileSync(join(dir, "pipeline.yaml"), config)
+    const r = runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml" })
+    return { status: r.status, cache: r.outputs.cache, stdout: r.stdout }
+  }
+  assert.equal(cache(minimal).cache, "pnpm", "on by default")
+  assert.equal(cache(`${minimal}runtime:\n  dependency_cache: true\n`).cache, "pnpm")
+  assert.equal(cache(`${minimal}runtime:\n  dependency_cache: false\n`).cache, "")
+  const bad = cache(`${minimal}runtime:\n  dependency_cache: "no"\n`)
+  assert.notEqual(bad.status, 0, "a typo fails Guard instead of silently caching")
+  assert.match(bad.stdout, /dependency_cache must be true or false/)
+})
