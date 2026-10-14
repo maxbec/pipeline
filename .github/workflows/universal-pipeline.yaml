@@ -65,7 +65,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read # the reuse step asks whether the base tip's push run is green
+      actions: read # the reuse steps look up earlier runs and their tree markers
     outputs:
       stack: ${{ steps.config.outputs.stack }}
       node-version: ${{ steps.config.outputs.node-version }}
@@ -97,12 +97,13 @@ jobs:
       cloudflare-build-command-b64: ${{ steps.config.outputs.cloudflare-build-command-b64 }}
       docker-cache-backend: ${{ steps.config.outputs.docker-cache-backend }}
       render-hook: ${{ steps.config.outputs.render-hook }}
-      reuse: ${{ steps.reuse.outputs.reuse == 'true' }}
-      reuse-base-sha: ${{ steps.reuse.outputs.base-sha }}
+      reuse: ${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}
+      reuse-note: ${{ steps.tree.outputs.reuse == 'true' && steps.tree.outputs.note || steps.reuse.outputs.note }}
+      tree: ${{ steps.tree.outputs.tree }}
       # A reused Check needs no tooling, so it does not queue for the
       # configured runner — often one self-hosted box that the work it saves
       # would otherwise occupy.
-      check-runner: ${{ steps.reuse.outputs.reuse == 'true' && '["ubuntu-latest"]' || steps.config.outputs.runner }}
+      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true') && '["ubuntu-latest"]' || steps.config.outputs.runner }}
     steps:
       - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,6 +189,15 @@ jobs:
           elif [[ -f package.json ]]; then PM=$(jq -r '.packageManager // "npm@"' package.json | cut -d@ -f1)
           fi
           out package-manager "${PM:-npm}"
+          # A self-hosted runner whose package store survives between jobs gains
+          # nothing from restoring the cache over it: crewsy's runners keep 2.2 GB
+          # under /_work and still pulled 640 MB per Check, 40 to 80 seconds.
+          DEPENDENCY_CACHE=$(yq -r '.runtime.dependency_cache' "$CONFIG_FILE")
+          case "$DEPENDENCY_CACHE" in
+            null|true) ;;
+            false) CACHE="" ;;
+            *) echo "::error::$CONFIG_FILE: .runtime.dependency_cache must be true or false, got '$DEPENDENCY_CACHE'."; exit 1 ;;
+          esac
           out cache "$CACHE"
           # pnpm/action-setup reads a pin from devEngines.packageManager first, then packageManager;
           # ask for the latest pnpm only when the manifest pins neither.
@@ -302,6 +312,46 @@ jobs:
           fi
           echo "✅ '$PR_TITLE' from $PR_HEAD into $PR_BASE is allowed"
 
+      # A Check reads nothing but the tree it checks out: the code, the
+      # lockfile, the caller's pin of this workflow and its pipeline.yaml are
+      # all in it. A tree that passed once passes again, and the release flow
+      # checks the same tree over and over: dev after a squash merge into an
+      # unmoved base, the promotion PR, main after it, dev after the Release
+      # PR. Every passing Check leaves a marker artifact named after its tree
+      # ("Mark the checked tree"); one from this repository's own pipeline lets
+      # Check report that result instead of recomputing it. Markers from a fork
+      # do not count: a fork's pull request runs the workflow from its own head
+      # and could upload any name. No marker, an API error included, runs the
+      # full Check.
+      - name: Was this tree checked green before?
+        id: tree
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
+          tree=$(gh api "repos/$REPO/git/commits/$SHA" --jq '.tree.sha' 2>/dev/null) || full "the commits API did not answer"
+          [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || full "${SHA:0:7} names no tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$tree&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                    and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                  | unique | .[]' 2>/dev/null) || full "the artifacts API did not answer"
+          for run in $runs; do
+            info=$(gh api "repos/$REPO/actions/runs/$run" --jq '[.path, .head_branch, .head_sha] | @tsv' 2>/dev/null) || continue
+            IFS=$'\t' read -r path branch head <<< "$info"
+            [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+            note="Lint, test and build passed on the identical tree ${tree:0:7} in run $run ($branch at ${head:0:7}), so that result stands."
+            { echo "reuse=true"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+            echo "$note"
+            exit 0
+          done
+          full "no Check of tree ${tree:0:7} has passed yet"
+
       # A Release PR is the base tip plus one commit that writes the version and
       # the changelog. Flaiky rebuilds it on every merge into the base, so
       # checking it again re-runs lint, test and build on a tree the base's own
@@ -313,7 +363,9 @@ jobs:
       # included, runs the full Check: this step can only ever say "the same as".
       - name: Is this a Release PR over a green base?
         id: reuse
-        if: github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release/')
+        if: >-
+          github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release/')
+          && steps.tree.outputs.reuse != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -370,7 +422,8 @@ jobs:
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \
             || full "the runs API did not answer"
           [[ "$runs" =~ ^[1-9] ]] || full "$BASE_REF at ${BASE_SHA:0:7} has no green push run of the pipeline yet"
-          { echo "reuse=true"; echo "base-sha=$BASE_SHA"; } >> "$GITHUB_OUTPUT"
+          note="Lint, test and build passed on $BASE_REF at ${BASE_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
+          { echo "reuse=true"; echo "base-sha=$BASE_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
           echo "Reusing the Check of $BASE_REF at ${BASE_SHA:0:7}: the head only writes $VERSION and the changelog."
 
   check:
@@ -387,22 +440,21 @@ jobs:
     env:
       STACK: ${{ needs.guard.outputs.stack }}
       PM: ${{ needs.guard.outputs.package-manager }}
-      # Guard found a Release PR whose tree is the green base tip plus the
-      # version and the changelog: every step below stands down and the job
-      # reports the base's result, on a hosted runner, in seconds.
+      # Guard found this very tree checked green before, or a Release PR whose
+      # tree is the green base tip plus the version and the changelog: every
+      # step below stands down and the job reports that result, on a hosted
+      # runner, in seconds.
       REUSE: ${{ needs.guard.outputs.reuse }}
     steps:
-      - name: Reuse the base's Check
+      - name: Reuse an earlier Check
         if: env.REUSE == 'true'
         shell: bash
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ needs.guard.outputs.reuse-base-sha }}
+          NOTE: ${{ needs.guard.outputs.reuse-note }}
         run: |
           set -euo pipefail
-          msg="Lint, test and build passed on $BASE_REF at ${BASE_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
-          echo "::notice::$msg"
-          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          echo "::notice::$NOTE"
+          echo "$NOTE" >> "$GITHUB_STEP_SUMMARY"
 
       # /tmp is noexec on the hardened rootless homelab runners; tooling that
       # mktemp+execs (esbuild, swc, native modules) needs an exec-capable tmp.
@@ -669,6 +721,30 @@ jobs:
           name: build-${{ github.sha }}
           path: ${{ needs.guard.outputs.artifact-path }}
           retention-days: 7
+
+      # The record Guard's "Was this tree checked green before?" looks for:
+      # only its name matters, the content is for a person reading it. Last,
+      # so a marker exists only when every step above passed. It is written on
+      # a reused Check too: a Release PR that stood down on its base's result
+      # vouches for its own tree, and that tree is what dev carries once the
+      # Release PR is squashed. `overwrite` because a re-run of a green run
+      # finds the marker of its own first attempt.
+      - name: Write the tree marker
+        if: needs.guard.outputs.tree != ''
+        shell: bash
+        env:
+          TREE: ${{ needs.guard.outputs.tree }}
+        run: |
+          printf '{"tree":"%s","sha":"%s","run":"%s","attempt":"%s"}\n' \
+            "$TREE" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/checked-tree.json"
+      - name: Mark the checked tree
+        if: needs.guard.outputs.tree != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pipeline-checked-tree-${{ needs.guard.outputs.tree }}
+          path: ${{ runner.temp }}/checked-tree.json
+          retention-days: 30
+          overwrite: true
 
   deploy:
     name: Deploy (${{ matrix.target.name }})

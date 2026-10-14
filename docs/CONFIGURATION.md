@@ -14,6 +14,7 @@ stack: auto # nodejs | python | none | auto
 runtime:
   node_version: '' # default: .nvmrc, then .node-version, then package.json engines.node, then lts/*
   python_version: '3.12'
+  dependency_cache: true # false on a self-hosted runner whose package store outlives the job: restoring the cache over it only costs time
 
 runner:
   labels: [] # default: vars.PIPELINE_RUNNER if set on the repository or org, else ubuntu-latest

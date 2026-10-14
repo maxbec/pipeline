@@ -160,17 +160,25 @@ test("test artifacts are uploaded right after a failed Test step, never on succe
   assert.equal(upload.with["retention-days"], 7)
 })
 
-test("a reused Check runs nothing but its notice, on a hosted runner", () => {
-  // Guard sets `reuse` only for a Release PR whose tree is the green base tip
-  // plus the version and the changelog. A step that forgot the gate would run
-  // on the runner with no checkout or no toolchain and turn the check red.
+test("a reused Check runs nothing but its notice and the tree marker, on a hosted runner", () => {
+  // Guard sets `reuse` for a tree that passed before, or for a Release PR whose
+  // tree is the green base tip plus the version and the changelog. A step that
+  // forgot the gate would run on the runner with no checkout or no toolchain
+  // and turn the check red. Only the marker runs either way: it needs neither.
   const doc = yaml(WORKFLOW)
   const check = doc.jobs.check
   assert.equal(check.env.REUSE, "${{ needs.guard.outputs.reuse }}")
   assert.equal(check["runs-on"], "${{ fromJSON(needs.guard.outputs.check-runner) }}")
-  assert.match(doc.jobs.guard.outputs["check-runner"], /reuse == 'true' && '\["ubuntu-latest"\]' \|\| steps\.config\.outputs\.runner/)
+  assert.equal(
+    doc.jobs.guard.outputs["check-runner"],
+    "${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true') && '[\"ubuntu-latest\"]' || steps.config.outputs.runner }}",
+  )
+  assert.equal(doc.jobs.guard.outputs.reuse, "${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}")
   const [notice, ...rest] = check.steps
   assert.equal(notice.if, "env.REUSE == 'true'")
+  assert.match(notice.env.NOTE, /needs\.guard\.outputs\.reuse-note/)
+  const marker = rest.splice(-2)
+  assert.deepEqual(marker.map((s) => s.name), ["Write the tree marker", "Mark the checked tree"])
   for (const step of rest) {
     const cond = String(step.if ?? "")
     assert.ok(
@@ -204,4 +212,29 @@ test("Node is set up before pnpm, and pnpm caches its own store", () => {
       `${job}: setup-node caches npm and yarn only`,
     )
   }
+})
+
+test("a passing Check marks its tree last, under the name Guard looks up", () => {
+  const doc = wf()
+  const steps = doc.jobs.check.steps
+  const [write, upload] = steps.slice(-2)
+  assert.equal(doc.jobs.guard.outputs.tree, "${{ steps.tree.outputs.tree }}")
+  for (const step of [write, upload]) {
+    // No status function: a failed step above skips both, so a marker means every step passed.
+    assert.equal(step.if, "needs.guard.outputs.tree != ''", `${step.name}`)
+  }
+  assert.match(write.run, /\$RUNNER_TEMP\/checked-tree\.json/)
+  const build = steps.find((s) => s.name === "Upload build artifact")
+  assert.equal(upload.uses, build.uses, "same upload-artifact pin as the build artifact")
+  assert.equal(upload.with.name, "pipeline-checked-tree-${{ needs.guard.outputs.tree }}")
+  assert.equal(upload.with.path, "${{ runner.temp }}/checked-tree.json")
+  assert.equal(upload.with.overwrite, true, "a re-run of a green run finds its own first attempt's marker")
+  const lookup = doc.jobs.guard.steps.find((s) => s.id === "tree")
+  assert.match(lookup.run, /name=pipeline-checked-tree-\$tree/, "Guard searches the name Check writes")
+  const release = doc.jobs.guard.steps.find((s) => s.id === "reuse")
+  assert.ok(
+    doc.jobs.guard.steps.indexOf(lookup) < doc.jobs.guard.steps.indexOf(release),
+    "the tree lookup runs first; the Release PR rule only when it found nothing",
+  )
+  assert.match(release.if, /steps\.tree\.outputs\.reuse != 'true'/)
 })
