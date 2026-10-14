@@ -727,8 +727,10 @@ jobs:
       # so a marker exists only when every step above passed. It is written on
       # a reused Check too: a Release PR that stood down on its base's result
       # vouches for its own tree, and that tree is what dev carries once the
-      # Release PR is squashed. `overwrite` because a re-run of a green run
-      # finds the marker of its own first attempt.
+      # Release PR is squashed. `overwrite` so a re-run never fails on the name
+      # an earlier attempt of the same run used. A re-run does not reuse its own
+      # first attempt (GitHub hides that attempt's artifacts from the lookup,
+      # measured 2026-10-14); a later run of the same tree does.
       - name: Write the tree marker
         if: needs.guard.outputs.tree != ''
         shell: bash

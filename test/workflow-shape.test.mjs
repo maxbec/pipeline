@@ -228,7 +228,7 @@ test("a passing Check marks its tree last, under the name Guard looks up", () =>
   assert.equal(upload.uses, build.uses, "same upload-artifact pin as the build artifact")
   assert.equal(upload.with.name, "pipeline-checked-tree-${{ needs.guard.outputs.tree }}")
   assert.equal(upload.with.path, "${{ runner.temp }}/checked-tree.json")
-  assert.equal(upload.with.overwrite, true, "a re-run of a green run finds its own first attempt's marker")
+  assert.equal(upload.with.overwrite, true, "a re-run must not 409 on its earlier attempt's name")
   const lookup = doc.jobs.guard.steps.find((s) => s.id === "tree")
   assert.match(lookup.run, /name=pipeline-checked-tree-\$tree/, "Guard searches the name Check writes")
   const release = doc.jobs.guard.steps.find((s) => s.id === "reuse")
