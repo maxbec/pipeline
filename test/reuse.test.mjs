@@ -52,6 +52,7 @@ test("a Release PR over a green base reuses the base's Check", () => {
   const r = reuse()
   assert.equal(r.outputs.reuse, "true")
   assert.equal(r.outputs["base-sha"], "b".repeat(40))
+  assert.match(r.outputs.note, /^Lint, test and build passed on dev at bbbbbbb; this head adds only the version/)
 })
 
 test("a plain version file and a version = line count as version edits", () => {

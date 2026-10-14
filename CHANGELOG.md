@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.3.0](https://github.com/maxbec/pipeline/compare/v5.2.2...v5.3.0) (2026-10-14)
+
+
+### ✨ Features
+
+* **check:** reuse the Check of a tree that already passed ([#115](https://github.com/maxbec/pipeline/issues/115)) ([d0fbdf7](https://github.com/maxbec/pipeline/commit/d0fbdf76d88bb293df921cf671aa8ab73cea893b))
+
+## [5.3.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.2.2...v5.3.0-beta.1) (2026-10-14)
+
+
+### ✨ Features
+
+* **check:** reuse the Check of a tree that already passed ([#115](https://github.com/maxbec/pipeline/issues/115)) ([d0fbdf7](https://github.com/maxbec/pipeline/commit/d0fbdf76d88bb293df921cf671aa8ab73cea893b))
+
 ## [5.2.2](https://github.com/maxbec/pipeline/compare/v5.2.1...v5.2.2) (2026-10-11)
 
 
