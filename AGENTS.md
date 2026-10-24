@@ -6,7 +6,7 @@ The reusable GitHub Actions workflow every repository across `navigaite`,
 `edilio-app` and `maxbec` calls, SHA-pinned. It answers one question — does the
 code check out, and does a published release deploy — and nothing else.
 Versioning, release PRs, tags, changelogs and promotion are Flaiky's
-(`maxbec/flaiky`, ADR 0003/0004/0009 there). Flama is gone.
+(`maxbec/flaiky`, ADR 0003/0004/0009 there).
 
 ## 2. Structure
 
