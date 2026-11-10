@@ -32,7 +32,7 @@ scripts/                                    repo bootstrap and org maintenance h
 - **Check** (`needs: guard`, not on release events). On the configured runner:
   TruffleHog binary over the commit range, dependency review (public repos),
   Node/Python setup, install, lint (Trunk when `.trunk/trunk.yaml` exists),
-  test, Infisical `preview` secrets, build, optional artifact. One job, so the
+  test, build, optional artifact. One job, so the
   context `pipeline / Check` is the single required status check everywhere.
 - **Deploy** (`needs: guard`, only `release: published`, provider ≠ none). A
   matrix over `deploy-targets` (one leg per Docker image, one leg named `app`
@@ -52,8 +52,9 @@ scripts/                                    repo bootstrap and org maintenance h
 4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`.** The caller's job id
    is `pipeline`. Renaming any of these changes the required check context in
    every branch protection and ruleset.
-5. **CI reads Infisical `preview`, never `production`.** Deploy reads the
-   environment it deploys.
+5. **The pipeline never talks to Infisical.** Credentials arrive as GitHub
+   secrets, pushed by Infisical's Secret Sync; app env for a Vercel build
+   comes from `vercel pull`. Check holds no deploy credential.
 6. **No release-please, no Flama, no promotion workflows here.** If a change
    needs a version, Flaiky's release train handles it after merge.
 7. Exactly three environments: `development`, `preview`, `production`.

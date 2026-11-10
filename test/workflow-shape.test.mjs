@@ -67,6 +67,22 @@ test("every provider from A8 has a step, and no release-please or Flama remains"
   assert.ok(!existsSync(join(ROOT, ".github/actions/release-management")), "release-management action gone")
 })
 
+test("neither the pipeline nor the caller template talks to Infisical", () => {
+  const doc = wf()
+  for (const [id, job] of Object.entries(doc.jobs)) {
+    assert.doesNotMatch(JSON.stringify(job), /infisical|CF_ACCESS/i, `${id} reads GitHub secrets only`)
+  }
+  assert.equal(doc.jobs.check.permissions["id-token"], undefined, "Check mints no OIDC token")
+  // Callers pinned to this release may have been rendered for the one before
+  // and still forward these; an undeclared secret is a startup failure.
+  const declared = Object.keys(doc.on.workflow_call.secrets)
+  for (const s of ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET", "INFISICAL_CLIENT_ID", "INFISICAL_CLIENT_SECRET"]) {
+    assert.ok(declared.includes(s), `${s} stays declared for one release`)
+  }
+  const caller = readFileSync(join(ROOT, ".github/workflows/examples/caller.yaml"), "utf8")
+  assert.doesNotMatch(caller, /infisical|CF_ACCESS/i)
+})
+
 test("the caller template pins by SHA, forwards the secrets and listens for releases", () => {
   const file = join(ROOT, ".github/workflows/examples/caller.yaml")
   const doc = yaml(file)
@@ -81,10 +97,6 @@ test("the caller template pins by SHA, forwards the secrets and listens for rele
     "the tag is a comment on the line above the sha, so the line stays under 120 characters",
   )
   for (const s of [
-    "CF_ACCESS_CLIENT_ID",
-    "CF_ACCESS_CLIENT_SECRET",
-    "INFISICAL_CLIENT_ID",
-    "INFISICAL_CLIENT_SECRET",
     "VERCEL_TOKEN",
     "VERCEL_ORG_ID",
     "VERCEL_PROJECT_ID",
@@ -148,7 +160,7 @@ test("test artifacts are uploaded right after a failed Test step, never on succe
   const testIndex = steps.findIndex((s) => s.name === "Test")
   assert.equal(steps[testIndex].id, "test", "the upload step reads the Test step's outcome by id")
   const upload = steps[testIndex + 1]
-  assert.equal(upload.name, "Upload test artifacts", "directly after Test, before Infisical and Build")
+  assert.equal(upload.name, "Upload test artifacts", "directly after Test, before Build")
   assert.match(String(upload.if), /^failure\(\) && /, "runs only after a failure, never on a green job")
   assert.match(String(upload.if), /steps\.test\.outcome == 'failure'/, "a failed lint or install does not count")
   assert.match(String(upload.if), /needs\.guard\.outputs\.test-artifact-path != ''/)
