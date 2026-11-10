@@ -30,15 +30,21 @@ on:
         required: false
         default: .github/pipeline.yaml
     secrets:
+      # Unused. The pipeline no longer reads Infisical: every credential arrives
+      # as a GitHub secret, pushed there by Infisical's Secret Sync. These four
+      # stay declared for one release so that a caller which still forwards
+      # them does not fail to start; the release after removes them.
       CF_ACCESS_CLIENT_ID:
-        description: Cloudflare Access service token id for the Infisical host
+        description: Unused, declared for one more release
         required: false
       CF_ACCESS_CLIENT_SECRET:
+        description: Unused, declared for one more release
         required: false
       INFISICAL_CLIENT_ID:
-        description: Infisical Universal Auth; OIDC via vars.INFISICAL_IDENTITY_ID is preferred
+        description: Unused, declared for one more release
         required: false
       INFISICAL_CLIENT_SECRET:
+        description: Unused, declared for one more release
         required: false
       VERCEL_TOKEN:
         required: false
@@ -436,7 +442,6 @@ jobs:
       contents: read
       pull-requests: read
       checks: write # trunk posts lint annotations through the Checks API
-      id-token: write # Infisical OIDC for build-time secrets
     env:
       STACK: ${{ needs.guard.outputs.stack }}
       PM: ${{ needs.guard.outputs.package-manager }}
@@ -646,62 +651,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # Build-time secrets come from Infisical's preview environment (CI never
-      # reads production). A transient Infisical outage or an Access gate must
-      # not hard-fail a compile-only build: probe first, skip with a warning.
-      - name: Infisical for the build
-        id: infisical
-        if: env.REUSE != 'true' && needs.guard.outputs.build == 'true'
-        shell: bash
-        env:
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_SLUG: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          INFISICAL_ENV_SLUG: ${{ vars.INFISICAL_ENV_SLUG || 'preview' }}
-          INFISICAL_DOMAIN: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$INFISICAL_PROJECT_SLUG" ]]; then echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "No vars.INFISICAL_PROJECT_SLUG; building without Infisical secrets."; exit 0; fi
-          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then method=oidc
-          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then method=universal
-          else echo "enabled=false" >> "$GITHUB_OUTPUT"; echo "::notice::Infisical auth incomplete; building without secrets."; exit 0; fi
-          probe="$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' --connect-timeout 5 --max-time 10 "${INFISICAL_DOMAIN%/}/api/status" 2>/dev/null || true)"
-          code="${probe%% *}"; type="${probe#* }"
-          if [[ "$code" =~ ^2[0-9][0-9]$ && "$type" == application/json* ]]; then
-            { echo "enabled=true"; echo "method=$method"; echo "env-slug=$INFISICAL_ENV_SLUG"; } >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Infisical at $INFISICAL_DOMAIN answered '${code:-000} ${type:-none}' (an Access redirect or an outage); building without secrets."
-          fi
-      - name: Load Infisical secrets (OIDC)
-        if: env.REUSE != 'true' && steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ steps.infisical.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-      - name: Load Infisical secrets (Universal Auth)
-        if: env.REUSE != 'true' && steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: universal
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ steps.infisical.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-
       - name: Build
         if: env.REUSE != 'true' && needs.guard.outputs.build == 'true'
         shell: bash
@@ -758,7 +707,7 @@ jobs:
       contents: read
       deployments: write
       packages: write # ghcr
-      id-token: write # OIDC: Infisical, npm trusted publishing
+      id-token: write # OIDC: npm trusted publishing
     strategy:
       fail-fast: false
       matrix:
@@ -849,55 +798,6 @@ jobs:
             yarn) yarn install --frozen-lockfile ;;
             *) if [[ -f package-lock.json ]]; then npm ci; else npm install; fi ;;
           esac
-
-      # Deploys read the environment they deploy: preview or production. Strict:
-      # a deploy that cannot read its secrets fails instead of shipping blind.
-      - name: Infisical for the deploy
-        id: infisical
-        if: env.PROVIDER == 'vercel' || env.PROVIDER == 'cloudflare-workers'
-        shell: bash
-        env:
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_IDENTITY_ID }}
-          INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
-          INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          INFISICAL_PROJECT_SLUG: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          INFISICAL_PROD_ENV_SLUG: ${{ vars.INFISICAL_PROD_ENV_SLUG || 'production' }}
-          INFISICAL_PREVIEW_ENV_SLUG: ${{ vars.INFISICAL_PREVIEW_ENV_SLUG || 'preview' }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$INFISICAL_PROJECT_SLUG" ]]; then echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [[ "$DEPLOY_ENVIRONMENT" == "production" ]]; then slug="$INFISICAL_PROD_ENV_SLUG"; else slug="$INFISICAL_PREVIEW_ENV_SLUG"; fi
-          if [[ -n "$INFISICAL_IDENTITY_ID" ]]; then method=oidc
-          elif [[ -n "$INFISICAL_CLIENT_ID" && -n "$INFISICAL_CLIENT_SECRET" ]]; then method=universal
-          else echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          { echo "enabled=true"; echo "method=$method"; echo "env-slug=$slug"; } >> "$GITHUB_OUTPUT"
-      - name: Load Infisical secrets (OIDC)
-        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'oidc'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: oidc
-          identity-id: ${{ vars.INFISICAL_IDENTITY_ID }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ steps.infisical.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-      - name: Load Infisical secrets (Universal Auth)
-        if: steps.infisical.outputs.enabled == 'true' && steps.infisical.outputs.method == 'universal'
-        uses: Infisical/secrets-action@77ab1f4ccd183a543cb5b42435fbd181189f4995 # v1.0.16
-        with:
-          method: universal
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ vars.INFISICAL_PROJECT_SLUG }}
-          env-slug: ${{ steps.infisical.outputs.env-slug }}
-          domain: ${{ vars.INFISICAL_DOMAIN || 'https://app.infisical.com' }}
-          secret-path: ${{ vars.INFISICAL_SECRET_PATH || '/' }}
-          extra-headers: |
-            CF-Access-Client-Id: ${{ secrets.CF_ACCESS_CLIENT_ID }}
-            CF-Access-Client-Secret: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
 
       # The provider build commands arrive base64-encoded, because GitHub drops
       # a job output it suspects of holding a credential. A step output inside
