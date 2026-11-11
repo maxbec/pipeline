@@ -90,20 +90,21 @@ that branch rather than a detached `HEAD`. With `deploy.vercel.preview_alias`
 set, every preview deployment is then aliased to that hostname: one URL that
 always shows the latest preview.
 
-Deploys read secrets from Infisical's `preview` or `production` environment
-(`vars.INFISICAL_PREVIEW_ENV_SLUG` / `vars.INFISICAL_PROD_ENV_SLUG` override
-the slugs). Builds in Check always read `preview` — CI never sees production
-credentials.
+The pipeline reads nothing from Infisical. Deploy credentials are GitHub
+secrets, pushed there by Infisical's Secret Sync (in a Team org as environment
+secrets of `preview` / `production`, so each deploy sees only its own). The app
+env of a Vercel build comes from `vercel pull`. Check gets no deploy
+credential and no app env.
 
 ## Repository variables and secrets
 
-Variables (`vars.*`): `PIPELINE_RUNNER` (JSON array of labels),
-`INFISICAL_IDENTITY_ID` (OIDC), `INFISICAL_PROJECT_SLUG`, `INFISICAL_ENV_SLUG`,
-`INFISICAL_DOMAIN`, `INFISICAL_SECRET_PATH`. In a Free org, org-level values are
-invisible to private repositories: set them per repository.
+Variables (`vars.*`): `PIPELINE_RUNNER` (JSON array of labels). In a Free org,
+org-level values are invisible to private repositories: set it per repository.
+The `INFISICAL_*` variables are no longer read.
 
-Secrets are forwarded by the caller, all optional: `CF_ACCESS_CLIENT_ID`,
-`CF_ACCESS_CLIENT_SECRET`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`,
-`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`,
+Secrets are forwarded by the caller, all optional: `VERCEL_TOKEN`,
+`VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `CLOUDFLARE_API_TOKEN`,
 `CLOUDFLARE_ACCOUNT_ID`, `RENDER_DEPLOY_HOOK`, `NPM_TOKEN` (only without npm
-trusted publishing).
+trusted publishing). `CF_ACCESS_*` and `INFISICAL_CLIENT_*` are still declared
+but unused, so that a caller rendered for an older release keeps starting; the
+next release removes them.

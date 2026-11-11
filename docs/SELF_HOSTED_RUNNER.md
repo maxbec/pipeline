@@ -86,3 +86,15 @@ privileged dind.
   deregister on its own.
 - Keep the digest current deliberately (Dependabot/renovate on this file or a
   scheduled bump), not via `:latest`.
+- A CPU limit (`cpus:` in compose) is a quota, not a set of cores. Inside the
+  container `nproc` and Node's `os.availableParallelism()` still report every
+  core of the host, so test runners and bundlers start one worker per host
+  core. On navigaite/crewsy (14 October 2026) Vitest and Metro started 21
+  workers on a 5-core quota: the runner hit its memory limit 1.2 million times,
+  sat 11 hours in CPU throttling, and 29 % of its Checks failed on E2E
+  timeouts. Hand the real count to the tools — the quota is in
+  `/sys/fs/cgroup/cpu.max` (crewsy: `scripts/ci/kerne.sh`) — or pin cores with
+  `cpuset`, which `nproc` does honour.
+- A runner whose work volume keeps the package store between jobs (crewsy's
+  keep 2.2 GB of pnpm store under `/_work`) gains nothing from the cache
+  restore: set `runtime.dependency_cache: false` in `pipeline.yaml`.
