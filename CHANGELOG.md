@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.4.0](https://github.com/maxbec/pipeline/compare/v5.3.0...v5.4.0) (2026-11-11)
+
+
+### ✨ Features
+
+* **pipeline:** stop reading Infisical in Check and Deploy ([#121](https://github.com/maxbec/pipeline/issues/121)) ([91f6c22](https://github.com/maxbec/pipeline/commit/91f6c221acc6875a4f04334f62197f40a30c5be9))
+
+
+### 📝 Documentation
+
+* import AGENTS.md into CLAUDE.md so Claude Code loads it ([#120](https://github.com/maxbec/pipeline/issues/120)) ([f33d6a3](https://github.com/maxbec/pipeline/commit/f33d6a3fe8f300ab59865cdc54faf80a17f54cec))
+* **runner:** a CPU quota is not a core count ([#116](https://github.com/maxbec/pipeline/issues/116)) ([25410f1](https://github.com/maxbec/pipeline/commit/25410f19be722994d54e61ef5f3fe14118284772))
+
 ## [5.4.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.3.0...v5.4.0-beta.1) (2026-11-11)
 
 
