@@ -218,14 +218,24 @@ test("runtime.dependency_cache: false leaves a store that outlives the job alone
   const dir = scratch()
   writeFileSync(join(dir, "package.json"), JSON.stringify({ packageManager: "pnpm@11.0.0" }))
   writeFileSync(join(dir, "pnpm-lock.yaml"), "")
-  const cache = (config) => {
+  const cache = (config, env = {}) => {
     writeFileSync(join(dir, "pipeline.yaml"), config)
-    const r = runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml" })
-    return { status: r.status, cache: r.outputs.cache, stdout: r.stdout }
+    const r = runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml", ...env })
+    return { status: r.status, cache: r.outputs.cache, dependencyCache: r.outputs["dependency-cache"], stdout: r.stdout }
   }
   assert.equal(cache(minimal).cache, "pnpm", "on by default")
+  assert.equal(cache(minimal).dependencyCache, "true")
   assert.equal(cache(`${minimal}runtime:\n  dependency_cache: true\n`).cache, "pnpm")
   assert.equal(cache(`${minimal}runtime:\n  dependency_cache: false\n`).cache, "")
+  assert.equal(cache(`${minimal}runtime:\n  dependency_cache: false\n`).dependencyCache, "false", "trunk's cache follows")
+
+  // A self-hosted runner keeps its store and uploads slowly: off unless asked for.
+  const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
+  assert.equal(cache(minimal, homelab).cache, "", "off by default on a self-hosted runner")
+  assert.equal(cache(minimal, homelab).dependencyCache, "false")
+  assert.equal(cache(`${minimal}runner:\n  labels: [self-hosted, crewsy-unraid]\n`).cache, "", "labels from the config count too")
+  assert.equal(cache(`${minimal}runtime:\n  dependency_cache: true\n`, homelab).cache, "pnpm", "an explicit true wins")
+  assert.equal(cache(`${minimal}runner:\n  labels: [ubuntu-latest]\n`, homelab).cache, "pnpm", "a hosted label in the config overrides the variable")
   const bad = cache(`${minimal}runtime:\n  dependency_cache: "no"\n`)
   assert.notEqual(bad.status, 0, "a typo fails Guard instead of silently caching")
   assert.match(bad.stdout, /dependency_cache must be true or false/)
