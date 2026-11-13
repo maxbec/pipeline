@@ -376,20 +376,31 @@ jobs:
       # the title names, and the base tip's push run is green, Check reports the
       # base's result instead of recomputing it. Anything else, an API error
       # included, runs the full Check: this step can only ever say "the same as".
+      #
+      # A promotion (`promote/*`) is the same one commit, over the last Release
+      # of the other branch instead of the base tip: the code that went green
+      # as a beta, with the stable version written over it. It used to be the
+      # second full Check of every change on its way to production (measured
+      # 2026-11-13: of the ten runs one change causes, the feature PR and the
+      # promotion were the two that ran lint, test and build). It reuses the
+      # push run of the Release it promotes, provided the merge into the base
+      # yields the head's own tree — a base with commits of its own is new code.
       - name: Is this a Release PR over a green base?
         id: reuse
         if: >-
-          github.event_name == 'pull_request' && startsWith(github.event.pull_request.head.ref, 'release/')
-          && steps.tree.outputs.reuse != 'true'
+          github.event_name == 'pull_request' && steps.tree.outputs.reuse != 'true'
+          && (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'promote/'))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
@@ -397,14 +408,29 @@ jobs:
           SEMVER='[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z][A-Za-z0-9]*(\.[0-9]+)?)?'
           [[ "$PR_TITLE" =~ ^chore\(release\):\ ($SEMVER)$ ]] || full "'$PR_TITLE' does not name a release version"
           VERSION="${BASH_REMATCH[1]}"
+          # What the head is one commit over: the base tip for a Release PR, the
+          # promoted Release for a promotion.
+          GREEN_SHA="$BASE_SHA"; GREEN_NAME="$BASE_REF"; GREEN_BRANCH="&branch=$BASE_REF"
+          if [[ "${HEAD_REF:-}" == promote/* ]]; then
+            head=$(gh api "repos/$REPO/git/commits/$HEAD_SHA" --jq '[.tree.sha, (.parents | length), (.parents[0].sha // "")] | @tsv' 2>/dev/null) \
+              || full "the commits API did not answer"
+            IFS=$'\t' read -r head_tree parents parent <<< "$head"
+            [[ "$parents" == "1" && "$parent" =~ ^[0-9a-f]{40}$ ]] || full "the promotion head is not one commit over a Release"
+            merged_tree=$(gh api "repos/$REPO/git/commits/$MERGE_SHA" --jq '.tree.sha' 2>/dev/null) || full "the commits API did not answer"
+            [[ "$merged_tree" =~ ^[0-9a-f]{40}$ && "$merged_tree" == "$head_tree" ]] \
+              || full "merging into $BASE_REF does not yield the head's tree, so $BASE_REF has commits of its own"
+            GREEN_SHA="$parent"; GREEN_NAME="the promoted Release"; GREEN_BRANCH=""
+          fi
           compare=$(mktemp)
-          gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA" > "$compare" 2>/dev/null || full "the compare API did not answer"
+          gh api "repos/$REPO/compare/$GREEN_SHA...$HEAD_SHA" > "$compare" 2>/dev/null || full "the compare API did not answer"
           verdict=$(VERSION="$VERSION" COMPARE="$compare" python3 - 2>&1 <<'PY'
           import json, os, re, sys
           c = json.load(open(os.environ["COMPARE"]))
           v = os.environ["VERSION"]
           if c.get("status") != "ahead" or c.get("ahead_by") != 1 or c.get("behind_by") != 0:
               sys.exit("the head is not exactly one commit over the base tip")
+          if len(c.get("files", [])) >= 300:
+              sys.exit("the compare API lists at most 300 files, so this diff may be cut short")
           sem = re.compile(r"v?\d+\.\d+\.\d+(?:-[A-Za-z][A-Za-z0-9]*(?:\.\d+)?)?")
           def bumped(old, new):
               # One version token of `old` became v, on a line that declares a
@@ -433,13 +459,13 @@ jobs:
                   sys.exit(name + " changes more than its version")
           PY
           ) || full "$verdict"
-          runs=$(gh api "repos/$REPO/actions/runs?head_sha=$BASE_SHA&event=push&branch=$BASE_REF&per_page=20" \
+          runs=$(gh api "repos/$REPO/actions/runs?head_sha=$GREEN_SHA&event=push$GREEN_BRANCH&per_page=20" \
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \
             || full "the runs API did not answer"
-          [[ "$runs" =~ ^[1-9] ]] || full "$BASE_REF at ${BASE_SHA:0:7} has no green push run of the pipeline yet"
-          note="Lint, test and build passed on $BASE_REF at ${BASE_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
-          { echo "reuse=true"; echo "base-sha=$BASE_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
-          echo "Reusing the Check of $BASE_REF at ${BASE_SHA:0:7}: the head only writes $VERSION and the changelog."
+          [[ "$runs" =~ ^[1-9] ]] || full "$GREEN_NAME at ${GREEN_SHA:0:7} has no green push run of the pipeline yet"
+          note="Lint, test and build passed on $GREEN_NAME at ${GREEN_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
+          { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+          echo "Reusing the Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
 
   check:
     name: Check
