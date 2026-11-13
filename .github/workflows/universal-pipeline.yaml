@@ -267,7 +267,19 @@ jobs:
           b64 vercel-build-command "$(str '.deploy.vercel.build_command' '')"
           out cloudflare-config "$(str '.deploy.cloudflare.config' 'wrangler.toml')"
           b64 cloudflare-build-command "$(str '.deploy.cloudflare.build_command' '')"
-          out docker-cache-backend "$(str '.deploy.docker.cache_backend' 'gha')"
+          # The layer cache follows the same reasoning as the dependency cache:
+          # `gha` with mode=max sends every intermediate layer through the
+          # runner's uplink (edilio 2026-08-24: 438 s of a 634 s build; still
+          # 913 s for one image on 2026-11-13), `local` keeps it on the runner's
+          # work volume. A repository can still name either.
+          DOCKER_CACHE_DEFAULT=gha
+          if jq -e 'index("self-hosted") != null' <<< "$RUNNER" >/dev/null; then DOCKER_CACHE_DEFAULT=local; fi
+          DOCKER_CACHE=$(str '.deploy.docker.cache_backend' "$DOCKER_CACHE_DEFAULT")
+          case "$DOCKER_CACHE" in
+            gha|local|none) ;;
+            *) echo "::error::$CONFIG_FILE: .deploy.docker.cache_backend must be gha, local or none, got '$DOCKER_CACHE'."; exit 1 ;;
+          esac
+          out docker-cache-backend "$DOCKER_CACHE"
           bool render-hook '.deploy.render.hook' false
           echo "stack=$STACK runner=$RUNNER provider=$PROVIDER targets=$TARGETS"
 
