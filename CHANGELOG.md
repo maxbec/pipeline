@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.4.2](https://github.com/maxbec/pipeline/compare/v5.4.1...v5.4.2) (2026-11-13)
+
+
+### ⚡ Performance
+
+* **guard:** reuse the Check of the Release a promotion carries ([#129](https://github.com/maxbec/pipeline/issues/129)) ([70bad26](https://github.com/maxbec/pipeline/commit/70bad26b005185d5913978f8f227a878b09ebf16))
+* **deploy:** keep the Docker layer cache on self-hosted runners ([#130](https://github.com/maxbec/pipeline/issues/130)) ([f99b31d](https://github.com/maxbec/pipeline/commit/f99b31d0369109255f8c79033a66a0e5170b0a41))
+
 ## [5.4.2-beta.1](https://github.com/maxbec/pipeline/compare/v5.4.1...v5.4.2-beta.1) (2026-11-13)
 
 
