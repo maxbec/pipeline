@@ -240,3 +240,16 @@ test("runtime.dependency_cache: false leaves a store that outlives the job alone
   assert.notEqual(bad.status, 0, "a typo fails Guard instead of silently caching")
   assert.match(bad.stdout, /dependency_cache must be true or false/)
 })
+
+test("the Docker layer cache stays on a self-hosted runner unless the config names a backend", () => {
+  const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
+  const backend = (config, env = {}) => parse(config, env).outputs["docker-cache-backend"]
+  assert.equal(backend(minimal), "gha", "hosted runners keep the GitHub cache")
+  assert.equal(backend(minimal, homelab), "local", "a homelab uplink does not carry every layer")
+  assert.equal(backend(`${minimal}runner:\n  labels: [self-hosted, crewsy-unraid]\n`), "local")
+  assert.equal(backend(`${minimal}deploy:\n  docker:\n    cache_backend: gha\n`, homelab), "gha", "an explicit backend wins")
+  assert.equal(backend(`${minimal}deploy:\n  docker:\n    cache_backend: none\n`), "none")
+  const bad = parse(`${minimal}deploy:\n  docker:\n    cache_backend: registry\n`)
+  assert.notEqual(bad.status, 0, "a backend the Deploy action does not know fails Guard")
+  assert.match(bad.stdout, /cache_backend must be gha, local or none/)
+})

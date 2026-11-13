@@ -33,6 +33,15 @@ that does not answer. That is why the caller grants `actions: read`. A reused
 Check marks its own tree too, so `dev` after the squashed Release PR is reused
 in turn.
 
+**A promotion reuses the Check of the Release it promotes.** `promote/main` is
+that Release plus the same one commit, with the stable version written over the
+beta. Guard applies the rule above against the promoted Release instead of the
+base tip, and asks one thing more: merging the head into the base must yield
+the head's own tree. A base with commits of its own is new code and gets the
+full Check. Of the ten runs one change causes from feature branch to
+production, this leaves the feature PR as the only one that lints, tests and
+builds (measured 2026-11-13; before, the promotion was the second).
+
 Nothing here versions, tags or writes release notes: [Flaiky](https://github.com/maxbec/flaiky)
 keeps the Release PR, merges it on approval, tags, publishes the GitHub release
 and thereby triggers Deploy (ADR 0003 / 0004 there).
