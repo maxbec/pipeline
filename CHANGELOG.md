@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.4.1](https://github.com/maxbec/pipeline/compare/v5.4.0...v5.4.1) (2026-11-13)
+
+
+### ⚡ Performance
+
+* **check:** skip the dependency and trunk cache on self-hosted runners ([#125](https://github.com/maxbec/pipeline/issues/125)) ([3a150c8](https://github.com/maxbec/pipeline/commit/3a150c86017cb692cafaae1950a2ae350b8a5fba))
+
 ## [5.4.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.4.0...v5.4.1-beta.1) (2026-11-13)
 
 
