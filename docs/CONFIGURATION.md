@@ -50,7 +50,7 @@ deploy:
     config: wrangler.toml
     build_command: ''
   docker:
-    cache_backend: gha
+    cache_backend: gha # gha | local | none. Default: gha on a GitHub-hosted runner, local (the runner's work volume, /_work/.buildx-cache) when the runner labels contain self-hosted
     images: # one Deploy leg per image
       - name: default # default or app → ghcr.io/<owner>/<repo>; any other name → <repo>-<name>
         dockerfile: Dockerfile
