@@ -97,4 +97,9 @@ privileged dind.
   `cpuset`, which `nproc` does honour.
 - A runner whose work volume keeps the package store between jobs (crewsy's
   keep 2.2 GB of pnpm store under `/_work`) gains nothing from the cache
-  restore: set `runtime.dependency_cache: false` in `pipeline.yaml`.
+  restore, and saving it is slow on a homelab uplink (dispoplaner, 2026-11-12:
+  20 minutes to upload 0.7 GB of trunk cache and 3.4 GB of npm cache after
+  three minutes of work). So `runtime.dependency_cache` defaults to `false`
+  when the runner labels contain `self-hosted`, and trunk's cache follows it.
+  Set it to `true` only for a runner that is recreated, not restarted, between
+  jobs.
