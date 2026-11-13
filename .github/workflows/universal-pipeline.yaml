@@ -78,6 +78,7 @@ jobs:
       package-manager: ${{ steps.config.outputs.package-manager }}
       pnpm-version: ${{ steps.config.outputs.pnpm-version }}
       cache: ${{ steps.config.outputs.cache }}
+      dependency-cache: ${{ steps.config.outputs.dependency-cache }}
       python-version: ${{ steps.config.outputs.python-version }}
       runner: ${{ steps.config.outputs.runner }}
       security: ${{ steps.config.outputs.security }}
@@ -195,16 +196,30 @@ jobs:
           elif [[ -f package.json ]]; then PM=$(jq -r '.packageManager // "npm@"' package.json | cut -d@ -f1)
           fi
           out package-manager "${PM:-npm}"
+          RUNNER=$(yq -o=json -I=0 '.runner.labels // []' "$CONFIG_FILE" | jq -c '.')
+          if [[ "$RUNNER" == "[]" ]]; then
+            if [[ -n "${PIPELINE_RUNNER:-}" ]]; then RUNNER=$(jq -c '.' <<< "$PIPELINE_RUNNER"); else RUNNER='["ubuntu-latest"]'; fi
+          fi
+          out runner "$RUNNER"
+
           # A self-hosted runner whose package store survives between jobs gains
           # nothing from restoring the cache over it: crewsy's runners keep 2.2 GB
-          # under /_work and still pulled 640 MB per Check, 40 to 80 seconds.
+          # under /_work and still pulled 640 MB per Check, 40 to 80 seconds. Saving
+          # is worse: a homelab uplink took 20 minutes to upload 0.7 GB of trunk
+          # cache and 3.4 GB of npm cache after three minutes of work (dispoplaner,
+          # 2026-11-12), and a pull request never finds the cache of its base
+          # branch, because the push run there reuses the checked tree and saves
+          # none. So the cache is off on a self-hosted runner unless the
+          # repository asks for it.
           DEPENDENCY_CACHE=$(yq -r '.runtime.dependency_cache' "$CONFIG_FILE")
           case "$DEPENDENCY_CACHE" in
-            null|true) ;;
-            false) CACHE="" ;;
+            null) if jq -e 'index("self-hosted") != null' <<< "$RUNNER" >/dev/null; then DEPENDENCY_CACHE=false; else DEPENDENCY_CACHE=true; fi ;;
+            true|false) ;;
             *) echo "::error::$CONFIG_FILE: .runtime.dependency_cache must be true or false, got '$DEPENDENCY_CACHE'."; exit 1 ;;
           esac
+          if [[ "$DEPENDENCY_CACHE" == "false" ]]; then CACHE=""; fi
           out cache "$CACHE"
+          out dependency-cache "$DEPENDENCY_CACHE"
           # pnpm/action-setup reads a pin from devEngines.packageManager first, then packageManager;
           # ask for the latest pnpm only when the manifest pins neither.
           PNPM_VERSION=""
@@ -212,12 +227,6 @@ jobs:
               or (.devEngines.packageManager | type == "object" and .name == "pnpm" and (.version // "") != "")' \
               package.json >/dev/null 2>&1; then PNPM_VERSION=latest; fi
           out pnpm-version "$PNPM_VERSION"
-
-          RUNNER=$(yq -o=json -I=0 '.runner.labels // []' "$CONFIG_FILE" | jq -c '.')
-          if [[ "$RUNNER" == "[]" ]]; then
-            if [[ -n "${PIPELINE_RUNNER:-}" ]]; then RUNNER=$(jq -c '.' <<< "$PIPELINE_RUNNER"); else RUNNER='["ubuntu-latest"]'; fi
-          fi
-          out runner "$RUNNER"
 
           # --- check --------------------------------------------------------------
           bool security '.security.enable' true
@@ -611,6 +620,10 @@ jobs:
       - name: Lint (trunk)
         if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
         uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
+        with:
+          # ~/.cache/trunk follows the dependency cache: a runner that keeps its
+          # package store keeps trunk's tools as well.
+          cache: ${{ needs.guard.outputs.dependency-cache != 'false' }}
       - name: Lint
         if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk != 'true'
         shell: bash
