@@ -14,6 +14,10 @@ Versioning, release PRs, tags, changelogs and promotion are Flaiky's
 .github/workflows/universal-pipeline.yaml   the three jobs; all logic is inline `run:` blocks
 .github/workflows/examples/caller.yaml      the caller every repository carries (rendered by Flaiky)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
+.github/workflows/train.yaml                the release train: a second reusable workflow, one job running train/bin
+.github/workflows/examples/train-caller.yaml   its caller (workflow_run, dispatch, schedule; never pull_request)
+.github/workflows/train-self.yaml           this repo's Train caller: uses ./.github/workflows/train.yaml
+.github/workflows/train-sweep.yaml          central sweep over the owner's other repositories; runs scripts/train-sweep.sh
 .github/pipeline.yaml                       this repo's own config (tests only)
 .github/actions/deploy-{vercel,cloudflare,docker,render}   provider actions used by Deploy
 .github/workflows/{trunk-upgrade,nightly-maintenance,hmac-cron-post}.yaml   other reusable workflows consumers call
@@ -50,7 +54,8 @@ scripts/                                    repo bootstrap and org maintenance h
    extract them by id; keep the ids.
 3. **Booleans in the config are read raw** (`bool()` in the config step): jq's
    `//` would turn an explicit `false` into the default.
-4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`.** The caller's job id
+4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`,** in the universal
+   pipeline; the train is a workflow of its own. The caller's job id
    is `pipeline`. Renaming any of these changes the required check context in
    every branch protection and ruleset.
 5. **The pipeline never talks to Infisical.** Credentials arrive as GitHub
@@ -59,6 +64,10 @@ scripts/                                    repo bootstrap and org maintenance h
 6. **No release-please, no Flama, no promotion workflows here.** If a change
    needs a version, Flaiky's release train handles it after merge.
 7. Exactly three environments: `development`, `preview`, `production`.
+8. **The sweep's log is public, the repositories it visits are not.**
+   `scripts/train-sweep.sh` prints indexes, counts and exit codes only.
+9. **The train never runs on a `pull_request` event** and never with the job's
+   own token: writes go through the App token, or they start no workflow.
 
 ## 5. Testing
 

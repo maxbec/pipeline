@@ -6,6 +6,10 @@ name: Pipeline
 on:
   pull_request:
     branches: [dev, main]
+    # The defaults plus ready_for_review: lifting a draft re-runs the pipeline,
+    # and its completion is what the train hears. Guard reuses the same tree's
+    # earlier Check, so that run is cheap.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [dev, main]
   release:

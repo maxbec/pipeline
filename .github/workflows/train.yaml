@@ -1,0 +1,162 @@
+---
+# The release train. A second reusable workflow beside the universal pipeline:
+# the pipeline answers "does this check out, does a release deploy", the train
+# acts on the answer. One job runs two entry points from train/bin:
+#
+#   release.ts  keeps one Release PR per branch, and tags and publishes a
+#               merged one
+#   merge.ts    merges every open pull request the merge rules allow
+#
+# Both look at the whole repository (every open pull request, both branches);
+# the event that started the run is only a poke.
+#
+# Everything that writes goes through a GitHub App installation token: a merge
+# or a release made with GITHUB_TOKEN starts no workflow, so Deploy would never
+# fire. The job's own token is read-only.
+#
+# The caller (examples/train-caller.yaml) starts this on a finished Pipeline
+# run, on a manual dispatch and on a schedule — never on a pull_request event.
+# Those three run the default branch's copy of the caller, so a pull request
+# cannot change the train that judges it.
+#
+# The secrets are optional: without the App secrets every step is skipped and
+# the job ends green, so the caller can be rolled out before they exist.
+name: Train
+
+on:
+  workflow_call:
+    secrets:
+      TRAIN_APP_ID:
+        description: App ID of the GitHub App the train acts as
+        required: false
+      TRAIN_APP_PRIVATE_KEY:
+        description: Private key of that App
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: Declared for the Fix job of a later release; unused today
+        required: false
+
+permissions: {}
+
+jobs:
+  train:
+    name: Train
+    # `github` is the caller's context here. A finished Pipeline run counts
+    # only when it is green and came from a pull request or a push: a release
+    # run is a deploy, and a red or cancelled run has nothing to merge.
+    # (Fix: a later release adds a job here for conclusion == 'failure'.)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push'))
+    # A public repository always runs GitHub-hosted: its runs can be started by
+    # anyone's pull request. A private one uses the caller's PIPELINE_RUNNER
+    # variable (a JSON array of labels) when set. An event without
+    # `repository.private` falls back to hosted, the safe side.
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    # One train per repository, and a queued one waits: two runs must never
+    # merge or tag at the same time.
+    concurrency:
+      group: train-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      # Secrets cannot be read in an `if:`, so a step turns them into an output.
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
+          fi
+
+      # Neither `owner` nor `repositories`: the token reaches this repository only.
+      - name: Mint the App token
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+
+      # The history code reads every branch and tag, and runs `git fetch origin`
+      # in this clone itself — so the credentials stay in the clone. No code
+      # from a pull request runs in this job, only train/ at the pinned commit.
+      - name: Checkout the repository, whole
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      # The train's code, at exactly the commit this workflow was pinned to:
+      # inside a called workflow `job.workflow_sha` is the reusable workflow's
+      # own commit. `github.workflow_sha` is the caller's, and fetching this
+      # repository at a caller's SHA dies with "not our ref".
+      - name: Checkout the train
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      # The entries are TypeScript run as-is; type stripping needs Node 24.12
+      # or later. check-latest keeps a self-hosted runner's cached 24.x from
+      # being older than that.
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      - name: Read the release configuration
+        id: config
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          CONFIG_FILE: .github/pipeline.yaml
+        run: |
+          set -euo pipefail
+          RELEASE='{}'
+          if [[ -f "$CONFIG_FILE" ]]; then
+            RELEASE=$(yq -o=json -I=0 '.release // {}' "$CONFIG_FILE")
+          fi
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        id: release
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          TRAIN_CLONE: ${{ github.workspace }}
+          TRAIN_RELEASE_CONFIG: ${{ steps.config.outputs.release }}
+          TRAIN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: node .pipeline/train/bin/release.ts
+
+      # A failed Release must not keep green pull requests waiting, so Merge
+      # runs whenever Release was reached. Either failure fails the job.
+      - name: Merge
+        id: merge
+        if: always() && steps.release.outcome != 'skipped' && steps.release.outcome != 'cancelled'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node .pipeline/train/bin/merge.ts

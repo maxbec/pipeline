@@ -1,0 +1,86 @@
+---
+# The central sweep: one scheduled run here does, for every other repository of
+# this owner that carries the Train caller, what that repository's own
+# schedule would do. It exists because this repository is public, so its
+# GitHub-hosted minutes are free; the same schedule in each private repository
+# is not.
+#
+# THE LOG OF THIS WORKFLOW IS PUBLIC AND THE REPOSITORIES IT VISITS ARE NOT.
+# scripts/train-sweep.sh therefore prints loop indexes, counts and exit codes
+# only — never a repository name, a pull request, a branch or an error text.
+# Keep it that way when changing either file.
+name: Train sweep
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: train-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Sweep
+    # Only here (a fork has no business sweeping), and under the same kill switch.
+    if: github.repository == 'maxbec/pipeline' && vars.TRAIN != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; nothing is swept."
+          fi
+
+      # `owner` without `repositories`: every repository of the installation.
+      - name: Mint the App token for the owner
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
+      - name: Checkout the train and the sweep script
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            train
+            scripts/train-sweep.sh
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      - name: Sweep
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TRAIN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          SWEEP_SELF: ${{ github.repository }}
+          SWEEP_TRAIN_BIN: ${{ github.workspace }}/train/bin
+          SWEEP_WORK: ${{ runner.temp }}/train-sweep
+        run: bash scripts/train-sweep.sh
