@@ -79,6 +79,16 @@ export interface FakePull {
     requiredStatusCheckContexts: string[]
     requiresSignatures: boolean
   }
+  labels?: string[]
+  draft?: boolean
+  /** `owner/name` of the head's repository when it is a fork; null when the fork is gone. */
+  headRepo?: string | null
+  /** Who merged it, as `GET /pulls/{n}` reports `merged_by`; set by the merge from `mergeActor`. */
+  mergedBy?: { login: string; type: "User" | "Bot" }
+  /** The conversation: `POST /issues/{n}/comments` on a pull request lands here. */
+  comments?: { author: string; body: string }[]
+  /** The head as it was when the pull request closed; GitHub keeps reporting that one. */
+  closedHeadSha?: string
 }
 
 export interface FakeCommit {
@@ -219,6 +229,14 @@ export class FakeGitHub {
   searchFailure: number | null = null
   /** Status every `POST /issues` answers instead, when set (Issues: write missing). */
   issueCreateFailure: number | null = null
+  /** Who the next `PUT /pulls/{n}/merge` is made by: a person, unless a test says the train's App. */
+  mergeActor: { login: string; type: "User" | "Bot" } = { login: "octocat", type: "User" }
+  /**
+   * Commits GitHub made itself and therefore signed: `createCommitOnBranch`,
+   * a merge through the API, a Git Data commit (as on an App token). Anything
+   * a test pushed with plain git is unverified, as it would be.
+   */
+  readonly signed = new Set<string>()
   #nextPull = 1
   #nextThread = 1
   #nextReview = 1
@@ -418,6 +436,7 @@ export class FakeGitHub {
       const args = ["commit-tree", String(body?.tree)]
       for (const p of parents) args.push("-p", p)
       const sha = gitWith(this.origin, { input: String(body?.message ?? "") }, ...args)
+      this.signed.add(sha)
       return this.#json(201, { sha })
     }
 
@@ -501,12 +520,25 @@ export class FakeGitHub {
     // pulls
     if (method === "GET" && parts[0] === "pulls" && parts.length === 1) {
       const head = q.get("head")?.split(":")[1]
-      const list = [...this.pulls.values()].filter(
-        (p) => (!head || p.head === head) && (q.get("state") ?? "open") === p.state,
-      )
+      const base = q.get("base")
+      const state = q.get("state") ?? "open"
+      const list = [...this.pulls.values()]
+        .filter(
+          (p) =>
+            (!head || p.head === head) &&
+            (!base || p.base === base) &&
+            (state === "all" || state === p.state),
+        )
+        .sort((a, b) => (q.get("direction") === "desc" ? b.number - a.number : a.number - b.number))
+      const page = Number(q.get("page") ?? "1")
+      const per = Number(q.get("per_page") ?? "30")
       return this.#json(
         200,
-        list.map((p) => this.#pullJson(p)),
+        // The list leaves `merged` and `merged_by` out, like the real one: only `merged_at` says it.
+        list.slice((page - 1) * per, page * per).map((p) => {
+          const { merged: _merged, merged_by: _by, ...listed } = this.#pullJson(p)
+          return listed
+        }),
       )
     }
     if (method === "POST" && parts[0] === "pulls" && parts.length === 1) {
@@ -533,11 +565,15 @@ export class FakeGitHub {
     if (pull && method === "PATCH" && parts.length === 2) {
       if (typeof body?.title === "string") pull.title = body.title
       if (typeof body?.body === "string") pull.body = body.body
-      if (body?.state === "closed" && !pull.merged) pull.state = "closed"
+      if (body?.state === "closed" && !pull.merged && pull.state === "open") {
+        pull.state = "closed"
+        pull.closedHeadSha = this.sha(pull.head) ?? undefined
+      }
       if (body?.state === "open" && !pull.merged) {
         if (this.sha(pull.head) === this.sha(pull.base))
           throw fail(422, "no commits between base and head")
         pull.state = "open"
+        delete pull.closedHeadSha
       }
       return this.#json(200, this.#pullJson(pull))
     }
@@ -559,6 +595,9 @@ export class FakeGitHub {
       pull.merged = true
       pull.state = "closed"
       pull.mergeSha = sha
+      pull.closedHeadSha = headSha ?? undefined
+      pull.mergedBy = { ...this.mergeActor }
+      this.signed.add(sha)
       this.onMerged?.(pull, sha)
       return this.#json(200, { sha, merged: true, message: "Pull Request successfully merged" })
     }
@@ -568,6 +607,23 @@ export class FakeGitHub {
         throw fail(422, "merge conflict between base and head")
       this.#mergeBaseIntoHead(pull)
       return this.#json(202, { message: "Updating pull request branch." })
+    }
+    if (pull && method === "GET" && parts[2] === "files") {
+      const changed = git(this.origin, "diff", "--name-status", "-M", `${pull.base}...${pull.head}`)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const [status = "", first = "", second] = line.split("\t")
+          return status.startsWith("R")
+            ? { filename: second ?? first, previous_filename: first, status: "renamed" }
+            : {
+                filename: first,
+                status: status === "A" ? "added" : status === "D" ? "removed" : "modified",
+              }
+        })
+      const page = Number(q.get("page") ?? "1")
+      const per = Number(q.get("per_page") ?? "30")
+      return this.#json(200, changed.slice((page - 1) * per, page * per))
     }
     if (pull && method === "POST" && parts[2] === "reviews") {
       const comments = (body?.comments as { path: string; line: number; body: string }[]) ?? []
@@ -632,6 +688,35 @@ export class FakeGitHub {
       })
       return this.#json(201, this.#issueJson(created))
     }
+    // A pull request is an issue too: its labels and its conversation live here.
+    const asIssue = parts[0] === "issues" ? this.pulls.get(Number(parts[1])) : undefined
+    if (asIssue && method === "POST" && parts[2] === "labels") {
+      const names = ((body?.labels as string[] | undefined) ?? []).map(String)
+      asIssue.labels = [...new Set([...(asIssue.labels ?? []), ...names])]
+      // GitHub creates a label it is asked to add and does not have.
+      for (const name of names) this.labels.add(name)
+      return this.#json(
+        200,
+        asIssue.labels.map((name) => ({ name })),
+      )
+    }
+    if (asIssue && method === "POST" && parts[2] === "comments") {
+      asIssue.comments = [
+        ...(asIssue.comments ?? []),
+        { author: `train-${this.owner}[bot]`, body: String(body?.body) },
+      ]
+      return this.#json(201, { id: asIssue.comments.length })
+    }
+    if (asIssue && method === "GET" && parts[2] === "comments") {
+      const page = Number(q.get("page") ?? "1")
+      const per = Number(q.get("per_page") ?? "30")
+      return this.#json(
+        200,
+        (asIssue.comments ?? [])
+          .map((c, i) => ({ id: i + 1, body: c.body, user: { login: c.author } }))
+          .slice((page - 1) * per, page * per),
+      )
+    }
     const issue = parts[0] === "issues" ? this.issues.get(Number(parts[1])) : undefined
     if (parts[0] === "issues" && !issue) throw fail(404, "Not Found")
     if (issue && method === "POST" && parts[2] === "comments") {
@@ -674,6 +759,58 @@ export class FakeGitHub {
           },
         ],
       })
+    }
+    // One commit: its message, its parents, and whether GitHub verified it.
+    if (method === "GET" && parts[0] === "commits" && parts.length === 2) {
+      let sha: string
+      try {
+        sha = git(this.origin, "rev-parse", "--verify", "-q", `${String(parts[1])}^{commit}`)
+      } catch {
+        throw fail(422, `No commit found for SHA: ${String(parts[1])}`)
+      }
+      const verified = this.signed.has(sha)
+      return this.#json(200, {
+        sha,
+        commit: {
+          message: git(this.origin, "log", "-1", "--format=%B", sha),
+          verification: { verified, reason: verified ? "valid" : "unsigned" },
+        },
+        parents: git(this.origin, "log", "-1", "--format=%P", sha)
+          .split(" ")
+          .filter(Boolean)
+          .map((parent) => ({ sha: parent })),
+      })
+    }
+    // `GET /compare/{base}...{head}`: where head stands relative to base.
+    if (method === "GET" && parts[0] === "compare") {
+      const [from = "", to = ""] = decodeURIComponent(parts.slice(1).join("/")).split("...")
+      const resolve = (ref: string): string => {
+        try {
+          return git(this.origin, "rev-parse", "--verify", "-q", `${ref}^{commit}`)
+        } catch {
+          throw fail(404, "Not Found")
+        }
+      }
+      const a = resolve(from)
+      const b = resolve(to)
+      const [behind = 0, ahead = 0] = git(
+        this.origin,
+        "rev-list",
+        "--left-right",
+        "--count",
+        `${a}...${b}`,
+      )
+        .split(/\s+/)
+        .map(Number)
+      const status =
+        ahead === 0 && behind === 0
+          ? "identical"
+          : behind === 0
+            ? "ahead"
+            : ahead === 0
+              ? "behind"
+              : "diverged"
+      return this.#json(200, { status, ahead_by: ahead, behind_by: behind })
     }
     if (method === "GET" && parts[0] === "branches" && parts.length === 2) {
       const sha = this.sha(String(parts[1]))
@@ -863,10 +1000,19 @@ export class FakeGitHub {
       body: p.body,
       html_url: `https://github.com/${this.owner}/${this.name}/pull/${p.number}`,
       state: p.state,
+      draft: p.draft ?? false,
       merged: p.merged,
+      merged_at: p.merged ? "2026-09-04T12:00:00Z" : null,
+      merged_by: p.merged ? (p.mergedBy ?? { login: "octocat", type: "User" }) : null,
       merge_commit_sha: p.mergeSha,
-      head: { ref: p.head, sha: this.sha(p.head) ?? p.mergeSha ?? "" },
-      base: { ref: p.base },
+      labels: (p.labels ?? []).map((name) => ({ name })),
+      head: {
+        ref: p.head,
+        sha: p.closedHeadSha ?? this.sha(p.head) ?? p.mergeSha ?? "",
+        repo:
+          p.headRepo === null ? null : { full_name: p.headRepo ?? `${this.owner}/${this.name}` },
+      },
+      base: { ref: p.base, repo: { full_name: `${this.owner}/${this.name}` } },
       user: { login: p.author ?? "octocat" },
     }
   }
@@ -925,7 +1071,7 @@ export class FakeGitHub {
       title: p.title,
       body: p.body,
       state: p.merged ? "MERGED" : p.state === "closed" ? "CLOSED" : "OPEN",
-      isDraft: false,
+      isDraft: p.draft ?? false,
       merged: p.merged,
       mergedAt: p.merged ? "2026-09-04T12:00:00Z" : null,
       author: this.#authorNode(p),
@@ -1116,6 +1262,7 @@ export class FakeGitHub {
       git(work, "push", "-q", "origin", `HEAD:${branch}`)
       return git(work, "rev-parse", "HEAD")
     })
+    this.signed.add(oid)
     this.commits.push({
       branch,
       message: { headline: input.message.headline, body: input.message.body ?? "" },
