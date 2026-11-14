@@ -14,7 +14,8 @@ import {
 } from "./entry.ts"
 import { type GitHubClient, GitHubHttpError } from "./github/client.ts"
 import {
-  mergeMethodFor,
+  allowedMergeMethodsOf,
+  chooseMergeMethod,
   mergePullRequest,
   repositoryKindOf,
   updateBranch,
@@ -193,6 +194,7 @@ export async function runMerge(input: MergeRunInput): Promise<MergeRunResult> {
 
   try {
     const kind = await repositoryKindOf(client, repo)
+    const allowed = await allowedMergeMethodsOf(client, repo)
     const pulls = await paged<OpenPull>(
       client,
       `/repos/${repo.owner}/${repo.name}/pulls?state=open&sort=created&direction=asc`,
@@ -253,9 +255,15 @@ export async function runMerge(input: MergeRunInput): Promise<MergeRunResult> {
         rows.push({ number, action: "blocked", reason: verdict.reason })
         continue
       }
-      const method = mergeMethodFor(state, kind)
+      const choice = chooseMergeMethod(state, kind, allowed)
+      if (!choice.ok) {
+        rows.push({ number, action: "blocked", reason: choice.reason })
+        continue
+      }
+      const method = choice.method
+      const note = choice.fallback ? ` (${choice.fallback})` : ""
       if (dryRun) {
-        rows.push({ number, action: "merged", reason: would(`would merge by ${method}`) })
+        rows.push({ number, action: "merged", reason: would(`would merge by ${method}${note}`) })
         continue
       }
       let sha: string
@@ -274,7 +282,7 @@ export async function runMerge(input: MergeRunInput): Promise<MergeRunResult> {
       }
       const verification = await verifyCommitSigned(client, repo, sha)
       if (verification.verified) {
-        rows.push({ number, action: "merged", reason: `${method} ${sha.slice(0, 7)}, verified` })
+        rows.push({ number, action: "merged", reason: `${method} ${sha.slice(0, 7)}, verified${note}` })
       } else {
         failed = true
         rows.push({

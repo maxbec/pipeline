@@ -344,3 +344,40 @@ test("a usage error is exit 2: no token, no repository, a malformed one, an unkn
   assert.equal(await entry(w, {}, ["--force"]).code, 2)
   assert.deepEqual(writes(w), [])
 })
+
+test("a repository that allows only squash gets a squash, whatever the policy's method", async () => {
+  // navigaite/arrange: main is the only branch, merge commits are switched off.
+  const w = world(home, "squash-only", "small")
+  w.gh.settings.allow_merge_commit = false
+  const number = await feature(w, "chore/slim-pipeline", "chore(ci): slim", undefined, "main")
+  const result = await run(w)
+  assert.equal(result.failed, false)
+  assert.equal(row(result, number).action, "merged")
+  const merge = w.gh.calls.find(
+    (c) => c.method === "PUT" && c.path.endsWith(`/pulls/${number}/merge`),
+  )
+  assert.equal((merge?.body as { merge_method?: string }).merge_method, "squash")
+})
+
+test("the policy's method switched off in the repository: the allowed one is used and named", async () => {
+  const w = world(home, "merge-only")
+  w.gh.settings.allow_squash_merge = false
+  const number = await feature(w, "feat/endpoint", "feat: the endpoint")
+  const result = await run(w)
+  assert.equal(result.failed, false)
+  assert.equal(row(result, number).action, "merged")
+  assert.match(row(result, number).reason, /^merge .*squash merges are not allowed/)
+  assert.equal(w.gh.pulls.get(number)?.merged, true)
+})
+
+test("a repository that allows neither squash nor merge commits blocks the pull request", async () => {
+  const w = world(home, "nothing-allowed")
+  w.gh.settings.allow_squash_merge = false
+  w.gh.settings.allow_merge_commit = false
+  const number = await feature(w, "feat/endpoint", "feat: the endpoint")
+  const from = w.gh.calls.length
+  const result = await run(w)
+  assert.equal(row(result, number).action, "blocked")
+  assert.match(row(result, number).reason, /neither squash merges nor merge commits/)
+  assert.deepEqual(writes(w, from), [])
+})
