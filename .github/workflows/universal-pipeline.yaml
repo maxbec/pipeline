@@ -181,12 +181,13 @@ jobs:
               while IFS= read -r KEY; do
                 case "$KEY" in
                   version_files)
+                    # An empty list is a choice, not a mistake: the repository
+                    # carries no version file and releases with the tag and
+                    # the CHANGELOG only. The train reads it the same way.
                     [[ "$(yq -r '.release.version_files | tag' "$CONFIG_FILE")" == '!!seq' ]] \
-                      || bad "release.version_files must be a non-empty list of paths."
-                    [[ "$(yq -r '.release.version_files | length' "$CONFIG_FILE")" -gt 0 ]] \
-                      || bad "release.version_files must be a non-empty list of paths."
+                      || bad "release.version_files must be a list of paths."
                     [[ "$(yq -r '.release.version_files | all_c(tag == "!!str" and . != "")' "$CONFIG_FILE")" == "true" ]] \
-                      || bad "release.version_files must be a non-empty list of paths; every entry a non-empty string."
+                      || bad "release.version_files must be a list of paths; every entry a non-empty string."
                     ;;
                   changelog_show_hidden)
                     [[ "$(yq -r '.release.changelog_show_hidden | tag' "$CONFIG_FILE")" == '!!bool' ]] \
