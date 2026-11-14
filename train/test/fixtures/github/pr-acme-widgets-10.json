@@ -1,0 +1,148 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 10,
+        "state": "MERGED",
+        "isDraft": false,
+        "merged": true,
+        "mergedAt": "2026-09-04T05:00:35Z",
+        "mergeable": "UNKNOWN",
+        "mergeStateStatus": "UNKNOWN",
+        "reviewDecision": null,
+        "baseRefName": "dev",
+        "headRefName": "feat/search",
+        "headRefOid": "2c3d4e5f60718293a4b5c6d7e8f9012345670a1b",
+        "autoMergeRequest": null,
+        "baseRef": {
+          "refUpdateRule": null,
+          "branchProtectionRule": null
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "2c3d4e5f60718293a4b5c6d7e8f9012345670a1b",
+                "signature": {
+                  "isValid": true,
+                  "state": "VALID",
+                  "signer": {
+                    "login": "octocat"
+                  }
+                },
+                "statusCheckRollup": {
+                  "state": "SUCCESS",
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Branch Guard",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (push)",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🔧 Setup & Configuration",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🔎 Static Checks",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🧪 Verify",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🚀 Vercel / ${{ matrix.environment }}",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🚀 DigitalOcean / ${{ matrix.environment }}",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 📦 Release Management",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🚦 Pipeline Gate",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🐳 Docker / ${{ matrix.image.name }}",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 📤 Promotion PR",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🤖 Release PR Auto-merge",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Pipeline (PR) / 🔄 Reconcile Dev Manifest",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "pipeline / Check",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "reviewThreads": {
+          "nodes": []
+        }
+      }
+    }
+  }
+}

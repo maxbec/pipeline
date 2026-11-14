@@ -18,6 +18,7 @@ Versioning, release PRs, tags, changelogs and promotion are Flaiky's
 .github/actions/deploy-{vercel,cloudflare,docker,render}   provider actions used by Deploy
 .github/workflows/{trunk-upgrade,nightly-maintenance,hmac-cron-post}.yaml   other reusable workflows consumers call
 test/                                       node:test; pulls `run:` blocks out of the YAML by step id and executes them
+train/                                      the release-train library and its tests (TypeScript, no build); see train/README.md
 docs/CONFIGURATION.md                       the v3 config reference
 scripts/                                    repo bootstrap and org maintenance helpers
 ```
@@ -62,7 +63,8 @@ scripts/                                    repo bootstrap and org maintenance h
 ## 5. Testing
 
 ```sh
-npm test        # node --test "test/**/*.test.mjs" — needs yq and bash on PATH
+npm test        # node --test over test/**/*.test.mjs and train/test/**/*.test.ts — needs yq, bash and git on PATH
+npm run typecheck   # tsc --noEmit over train/
 actionlint      # https://github.com/rhysd/actionlint
 ```
 

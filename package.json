@@ -4,12 +4,15 @@
   "private": true,
   "devDependencies": {
     "@commitlint/cli": "^19.8.1",
-    "@commitlint/config-conventional": "^21.2.0"
+    "@commitlint/config-conventional": "^21.2.0",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node --test \"test/**/*.test.mjs\" \"train/test/**/*.test.ts\"",
+    "typecheck": "tsc -p train/tsconfig.json"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24.12"
   }
 }
