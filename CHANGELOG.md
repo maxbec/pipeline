@@ -1,5 +1,28 @@
 # Changelog
 
+## [5.5.0](https://github.com/maxbec/pipeline/compare/v5.4.2...v5.5.0) (2026-11-14)
+
+
+### ✨ Features
+
+* **train:** move the fleet tool and render the Train caller ([#141](https://github.com/maxbec/pipeline/issues/141)) ([0d73761](https://github.com/maxbec/pipeline/commit/0d7376185e0510db63f600c8f54698d453aaca29))
+* **train:** Fix job — rerun once, then a guarded patch from Claude Code ([#142](https://github.com/maxbec/pipeline/issues/142)) ([823531f](https://github.com/maxbec/pipeline/commit/823531f2cda62ffff62a644ec0f38604b0798a5c))
+* **train:** merge and release entry points for Actions ([#140](https://github.com/maxbec/pipeline/issues/140)) ([d908f3b](https://github.com/maxbec/pipeline/commit/d908f3bd2a521ca0b6e3fd03df3fd9b55745e131))
+* **train:** the Train workflow, its caller and the release config ([#139](https://github.com/maxbec/pipeline/issues/139)) ([c6694d5](https://github.com/maxbec/pipeline/commit/c6694d504c72c485b7f1c7bfe3f9784345b7d0e9))
+* **train:** move the release-train library into the pipeline ([#138](https://github.com/maxbec/pipeline/issues/138)) ([1113ddb](https://github.com/maxbec/pipeline/commit/1113ddb54e48cd510cc64fcf7f37dcd842488722))
+
+
+### 🐛 Bug Fixes
+
+* **guard:** accept an empty release.version_files list ([#145](https://github.com/maxbec/pipeline/issues/145)) ([b9e45b8](https://github.com/maxbec/pipeline/commit/b9e45b8543e87542c373572b9875a4481652cc25))
+
+
+### 📝 Documentation
+
+* **runner:** describe the runners as they are, prune stale workspaces ([#136](https://github.com/maxbec/pipeline/issues/136)) ([b9bc99d](https://github.com/maxbec/pipeline/commit/b9bc99d265492ee9e237714429f2209a07d1bc75))
+* **runner:** do not copy trunk's cache when a runner is recreated ([#135](https://github.com/maxbec/pipeline/issues/135)) ([2ef8697](https://github.com/maxbec/pipeline/commit/2ef86977471ece09c75958af40cd376f6bbc7dc3))
+* **runner:** keep the homelab runner caches on the work volume, bounded ([#134](https://github.com/maxbec/pipeline/issues/134)) ([f09582c](https://github.com/maxbec/pipeline/commit/f09582c44140dd5c1fa857d6e2053fb8e5d4f798))
+
 ## [5.5.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.5.0-beta.1...v5.5.0-beta.2) (2026-11-14)
 
 
