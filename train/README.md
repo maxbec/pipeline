@@ -150,10 +150,6 @@ version on another commit than the merge (`error`), a Release PR merged by
 merged by a person), a backmerge that could not be opened, or an unexpected
 error.
 
-## Not here yet
-
-The remaining hand scripts follow in later pull requests.
-
 ## Fix
 
 `bin/fix.ts` and `src/fix/` are the Fix: what the train does when
@@ -173,3 +169,112 @@ runs next to a tree the pull request controls and executes nothing from it;
 `commit` holds the token that writes and never has that tree. The tests in
 `test/fix/` run against `fix-world.ts`, the fake GitHub plus runs, jobs, logs,
 comments and labels.
+
+## Fleet tool
+
+`bin/migrate-repos.ts` brings every repository to the shape the pipeline
+expects, pinned to one commit of `maxbec/pipeline`. It is run by hand from a
+clone of this repository, never in Actions.
+
+```sh
+npm ci                                             # once: the config conversion needs the `yaml` package
+node train/bin/migrate-repos.ts                    # dry run: the plan per repository, nothing written
+node train/bin/migrate-repos.ts --only acme/widgets --apply
+```
+
+What it needs:
+
+- **Local clones.** It never clones. It works on every git clone it finds
+  under `<home>/companies/<company>/repos/<repo>` whose `origin` is on
+  github.com (a clone named `docs` is skipped), and reads each tree from
+  `origin/<branch>` after a fetch. A repository with `origin/dev` is major and
+  gets its pull request into `dev`; any other gets it into `main`.
+- **A clone of this repository with its tags**, for the pin and the two
+  templates. By default the one the tool runs from.
+- **The `gh` CLI, logged in.** Every GitHub call uses its token.
+
+Per repository, in one signed commit (`createCommitOnBranch`) on the branch
+`chore/slim-pipeline` and one pull request into the base branch:
+
+- `.github/workflows/ci.yaml` from `examples/caller.yaml` and
+  `.github/workflows/train.yaml` from `examples/train-caller.yaml`, both at the
+  same pin: the sha on the `uses:` line, the tag in a comment above it, no
+  line over 120 characters.
+- `.github/pipeline.yaml` in version 3, the files of earlier release tooling
+  deleted, and the pipeline section of `AGENTS.md` / `CLAUDE.md` rewritten
+  where the file has one.
+
+Beside the commit it normalizes the merge settings and the default branch,
+sets the required status context to `pipeline / Check` in the repository's own
+branch protection and rulesets, and closes the pull requests and branches of
+the old release bots. A rerun finishes what an earlier run left: it merges the
+pull request once `canMerge` says so (squash, pinned to the head it judged),
+updates it once when it is behind, and does nothing when the files already
+match. `maxbec/pipeline` itself and archived repositories are skipped.
+
+| Option | |
+|---|---|
+| `--apply` | write; without it the tool prints the plan and changes nothing |
+| `--only <owner/name>` | this repository only; repeatable |
+| `--pipeline-ref <tag-or-sha>` | the pin; default is the newest stable `vX.Y.Z` tag. A prerelease tag (`v5.5.0-beta.1`) is a tagged pin and is rendered with its version |
+| `--allow-untagged` | let `--apply` pin a commit that carries no version tag; refused otherwise |
+| `--overrides <file.json>` | the fleet's deviations (below); default none |
+| `--train-schedule keep\|drop\|auto` | the schedule block of the Train caller. `auto` (default) asks `GET /users/{owner}`: dropped for a user account, whose repositories a central sweep covers, kept for an organization |
+| `--no-train` | leave `.github/workflows/train.yaml` alone: neither written nor removed |
+| `--remove-train` | delete `.github/workflows/train.yaml` where it exists |
+| `--home <dir>` | where `companies/` lives; default the user's home directory |
+| `--company <name>` | look only in `companies/<name>/repos`; repeatable; default every directory under `companies/` |
+| `--pipeline-clone <dir>` | the pipeline clone to read the pin and templates from; default the checkout the tool runs from |
+
+Exit 0 when every repository was planned or applied, 1 when one failed, 2 for
+a wrong command line, an unknown ref or an untagged pin on `--apply`.
+
+A pin whose commit has no `examples/train-caller.yaml` cannot carry a Train
+caller: the tool says so and leaves `train.yaml` alone.
+
+### The overrides file
+
+Deviations name repositories, so they are not in this repository. They live
+in a JSON file with whoever runs the tool; every key is optional, an unknown
+key is refused.
+
+```json
+{
+  "repositories": {
+    "acme/widgets": {
+      "secrets": { "NPM_TOKEN": "${{ secrets.ACME_NPM_TOKEN }}" },
+      "renderHook": true,
+      "extraFiles": { ".github/workflows/extra.yaml": "---\nname: Extra\n" }
+    }
+  },
+  "legacyPaths": ["^\\.oldtool/"],
+  "singleQuoteTrunkPlugins": ["acme-trunk-plugin"]
+}
+```
+
+| Key | |
+|---|---|
+| `repositories.<owner/name>.secrets` | a secret the Pipeline caller forwards, taken from a differently named repository secret; the name must be one the template forwards |
+| `repositories.<owner/name>.renderHook` | sets `deploy.render.hook: true` in `.github/pipeline.yaml` |
+| `repositories.<owner/name>.extraFiles` | path to contents, written beside the callers. A YAML file must start with `---`. A difference that is only a moved action pin is not written back |
+| `legacyPaths` | regular expressions over repository paths, deleted in addition to the built-in list |
+| `singleQuoteTrunkPlugins` | a `.trunk/trunk.yaml` that mentions one of these gets `.github/pipeline.yaml` single-quoted, for a plugin whose prettier config asks for that |
+
+### Moving one repository to a beta pin
+
+```sh
+git fetch --tags
+node train/bin/migrate-repos.ts --only acme/widgets --pipeline-ref v5.5.0-beta.1          # look
+node train/bin/migrate-repos.ts --only acme/widgets --pipeline-ref v5.5.0-beta.1 --apply  # commit and pull request
+node train/bin/migrate-repos.ts --only acme/widgets --pipeline-ref v5.5.0-beta.1 --apply  # again, once Check is green: merge
+```
+
+### Rolling back
+
+A caller pinned to a commit that has no `.github/workflows/train.yaml` dies
+with `startup_failure`, so going back to a pin from before the train takes the
+Train caller out in the same commit that moves `ci.yaml` back:
+
+```sh
+node train/bin/migrate-repos.ts --only acme/widgets --pipeline-ref v5.4.2 --remove-train --apply
+```

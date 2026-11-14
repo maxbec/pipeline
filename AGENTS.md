@@ -12,7 +12,7 @@ Versioning, release PRs, tags, changelogs and promotion are Flaiky's
 
 ```
 .github/workflows/universal-pipeline.yaml   the three jobs; all logic is inline `run:` blocks
-.github/workflows/examples/caller.yaml      the caller every repository carries (rendered by Flaiky)
+.github/workflows/examples/caller.yaml      the caller every repository carries (rendered by train/bin/migrate-repos.ts)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
 .github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge) and the three Fix jobs, all running train/bin
 .github/workflows/examples/train-caller.yaml   its caller (workflow_run, dispatch, schedule; never pull_request)
@@ -94,6 +94,6 @@ is checked by the workflow it changes (`ci.yaml`).
   the config step, the row in `docs/CONFIGURATION.md`, and the provider to the
   shape test.
 - **Bump a pinned action**: change the SHA and the version comment together.
-- **Roll out a pipeline change**: merge to `dev`, let Flaiky release it, then
-  repin every caller with `provisioning/migrate-repos.ts` in `maxbec/flaiky`.
+- **Roll out a pipeline change**: merge to `dev`, let it be released, then
+  repin every caller with `train/bin/migrate-repos.ts` (train/README.md, "Fleet tool").
   A merged fix is live nowhere until callers repin.

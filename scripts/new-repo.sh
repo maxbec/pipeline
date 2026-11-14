@@ -73,7 +73,7 @@ cat <<EOF
         VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID; set
         deployment.provider: vercel + vercel.scope in .github/pipeline.yaml
     [ ] Put the repository on the slim pipeline and register it in Flaiky:
-        node provisioning/migrate-repos.ts --only $REPO --apply   (in maxbec/flaiky)
+        node train/bin/migrate-repos.ts --only $REPO --apply   (in maxbec/pipeline)
     [ ] Adjust .github/pipeline.yaml (stack, runtime, test/build commands)
 EOF
 echo "DONE — $REPO is on the paved road."

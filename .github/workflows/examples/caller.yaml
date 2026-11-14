@@ -1,6 +1,6 @@
 ---
 # The one caller every repository carries as .github/workflows/ci.yaml.
-# provisioning/migrate-repos.ts (maxbec/flaiky) renders it: __PIPELINE_SHA__ and
+# train/bin/migrate-repos.ts (maxbec/pipeline) renders it: __PIPELINE_SHA__ and
 # __PIPELINE_VERSION__ become the pinned commit and its tag. Nothing else is
 # per-repository — behaviour lives in .github/pipeline.yaml.
 #
