@@ -22,6 +22,9 @@
 #   5. on a runner with its own Docker daemon: stopped containers, dangling
 #      images, unused volumes and the build cache; every unused image once
 #      /var/lib/docker is over its cap.
+#   6. workspaces: the checkout of a repository that no job has touched for
+#      WORKSPACE_MAX_AGE_DAYS goes; the runner makes a new one when the
+#      repository builds again.
 #
 # DRY_RUN=1 prints what it would do and changes nothing.
 set -uo pipefail
@@ -37,6 +40,7 @@ CAP_DOCKER_MB=${CAP_DOCKER_MB:-15000} # /var/lib/docker of an in-container daemo
 TOOL_KEEP=${TOOL_KEEP:-4}
 BUILDX_MAX_AGE_DAYS=${BUILDX_MAX_AGE_DAYS:-14}
 BUILD_CACHE_MAX=${BUILD_CACHE_MAX:-5GB}
+WORKSPACE_MAX_AGE_DAYS=${WORKSPACE_MAX_AGE_DAYS:-30}
 
 log() { echo "$(date '+%F %T') $*"; }
 size_mb() { du -sxm "$1" 2>/dev/null | cut -f1; }
@@ -98,6 +102,20 @@ prune_buildx() { # prune_buildx <buildx cache root>
   done
 }
 
+prune_workspaces() { # prune_workspaces <work volume>
+  local dir
+  # A workspace is /_work/<repo>/<repo>; the runner's own directories start
+  # with "_", the caches with ".". Every checkout and every install changes the
+  # entries of the inner directory, so its mtime is the last job's.
+  for dir in "$1"/[!_.]*/; do
+    [[ -d $dir ]] || continue
+    dir=${dir%/}
+    if [[ -z $(find "$dir" -maxdepth 1 -newermt "-$WORKSPACE_MAX_AGE_DAYS days" -print -quit) ]]; then
+      wipe "$dir" "no job for $WORKSPACE_MAX_AGE_DAYS days"
+    fi
+  done
+}
+
 prune_docker() { # prune_docker <container>: the runner's own daemon, if it runs one
   local root mb all=""
   docker exec "$1" docker info >/dev/null 2>&1 || return 0
@@ -139,6 +157,7 @@ for runner in $RUNNERS; do
   done
   prune_tools "$data/_tool"
   prune_buildx "$data/.buildx-cache"
+  prune_workspaces "$data"
   prune_docker "$runner"
   log "$runner: $(size_mb "$data") MB after"
 done

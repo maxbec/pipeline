@@ -1,83 +1,90 @@
 # Self-Hosted Runner (homelab)
 
-Navigaite runs a self-hosted GitHub Actions runner on the Mainz homelab (Unraid)
-so that the org's **private-repo** CI does not consume the board-set **$20/month**
-GitHub Actions spending cap. This guide is the hardened, safe way to operate it.
+The private repositories of `navigaite` and `edilio-app` run Check and Deploy on
+runners on the Mainz homelab (unraid) instead of GitHub-hosted minutes. This
+page describes the runners as they are, how a repository reaches them, and how
+their caches are kept and bounded.
 
-> **Public repos never use this runner.** `navigaite/.github` and
-> `navigaite/nvgt-trunk-plugin` are public; fork PRs can run arbitrary code.
-> Untrusted code must not execute on the homelab. Public repos stay on
-> GitHub-hosted `ubuntu-latest` (which is free for public repos anyway).
+> **Public repos never use these runners.** A fork PR can run arbitrary code,
+> and untrusted code must not execute on the homelab. Public repos stay on
+> GitHub-hosted `ubuntu-latest`, which is free for them anyway. Never register
+> a self-hosted runner for a public repository.
 
-A ready-to-deploy Compose stack lives next to this file:
-[`self-hosted-runner/docker-compose.yml`](./self-hosted-runner/docker-compose.yml).
+## What runs today
 
-## Why hardening was required
+Read from `docker inspect` on unraid on 2026-11-14. The three org runners are
+plain `docker run` containers — no compose file, no Portainer stack — from
+`myoung34/github-runner:ubuntu-noble`, as root, with `EPHEMERAL=true`
+(one job per runner process; the container restarts itself afterwards) and
+`DISABLE_AUTO_UPDATE=true`:
 
-The legacy `gh-actions-runner` stack ran `myoung34/github-runner:latest` with:
+| Container | Runner | Registered at | Labels | Docker inside | Memory / CPUs |
+| --- | --- | --- | --- | --- | --- |
+| `gh-runner-navigaite-homelab` | `mainz-homelab-navigaite` | org `navigaite`, group `homelab` | `self-hosted, mainz-homelab, linux, x64` | none | 3 GiB / 2, pinned to 16–17 |
+| `gh-runner-navigaite-homelab-2` | `mainz-homelab-navigaite-2` | same | same | none | 3 GiB / 2, pinned to 16–17 |
+| `gh-runner-edilio-homelab` | `mainz-homelab-edilio` | org `edilio-app`, group `Default` | the same plus `docker` | its own daemon (`privileged`, `START_DOCKER_SERVICE=true`) | 6 GiB / 4, pinned to 12–15 |
 
-| Legacy setting | Risk | Fix |
-| --- | --- | --- |
-| `privileged: true` + in-container Docker-in-Docker | Container escape → host root on the homelab | Drop `privileged`; disable in-container Docker; use rootless BuildKit only where image builds are needed |
-| `image: ...:latest` | Unpinned — a compromised/moved tag silently changes what runs | Pin by digest (`@sha256:…`) |
-| Repo-scoped, one container per repo | Doesn't scale to the fleet; each needs its own PAT | One **org-level runner group** (`homelab`) for all private repos |
-| `docker` label advertised | Misleads jobs into scheduling Docker work on a daemonless runner | Fleet labels: `self-hosted, mainz-homelab, linux, x64` |
+The limits are part of each container (`--memory`, `--cpus`, `--cpuset-cpus`).
+Inside, `nproc` reports the pinned cores, because `cpuset` is honoured where a
+bare `--cpus` quota is not (see the operating notes).
 
-`jq` is baked into the myoung34 image and is intentionally kept — the pipeline's
-Node lint/test/build steps depend on it (a missing `jq` silently no-ops those
-steps to a false success; see the NAV-22 audit).
+The edilio runner is privileged because its tests start service containers and
+its Deploy builds images; both need a Docker daemon, and it runs its own inside
+the container. **No runner mounts `/var/run/docker.sock`, and none should:**
+with the host's socket the service containers would bind on the production
+host and fight it for ports. Never put a runner on a production host either —
+a privileged in-container daemon is root there.
 
-## Topology
+`jq` comes with the image and must stay: the pipeline's steps depend on it.
 
-Two ways to register, selected by Docker Compose profile in the stack file:
+Repo-scoped runners live beside these three and are not described here:
+`crewsy-runner` and `crewsy-runner-2` (compose file
+`/mnt/user/appdata/crewsy-runner/docker-compose.yml`, see crewsy's
+`docs/ci-runner.md`), and one each for `maxbec/platzl-finder` and
+`navigaite/maimaldrei-mietkatalog` (a Portainer stack). unraid has no memory
+left for another one.
 
-- **Option A — org runner group (preferred).** One runner group named `homelab`
-  at the org level, access **limited to private repos**, serving every private
-  navigaite repo. Requires an `ACCESS_TOKEN` (PAT) with **`admin:org`**.
-  → `docker compose --profile org up -d`
-- **Option B — repo-scoped (interim).** One container per opted-in private repo,
-  registered with a `repo`-scope PAT. Mirrors the legacy topology, hardened.
-  Use only until `admin:org` is available. → `docker compose --profile repo up -d`
+### The hardened shape that was never deployed
 
-### Prerequisite: `admin:org` for Option A
-
-Creating an org runner group and reading Actions billing needs `admin:org`, which
-the CTO `gh` token does **not** currently carry (`gist, read:org, repo, workflow`).
-Grant it interactively:
-
-```bash
-gh auth refresh -s admin:org
-```
-
-or provision a scoped PAT (`admin:org`) in the runner's secret store as
-`RUNNER_ORG_TOKEN`. This is a board/human step (interactive OAuth).
+[`self-hosted-runner/docker-compose.yml`](./self-hosted-runner/docker-compose.yml)
+is a design from July 2026: image pinned by digest, `no-new-privileges`, no
+in-container Docker, a rootless BuildKit sidecar for image builds, one compose
+stack. It was not rolled out, and the live runners differ from it in three
+ways: the image is a moving tag, not a digest; they are `docker run`
+containers; and the edilio runner is privileged. Treat the file as a target to
+move towards, not as a description — and do not `docker compose up` it next to
+the live containers: it would register a second runner under the same name.
 
 ## Wiring a repo to the runner
 
-Runners are matched by label. In a repo's `.github/pipeline.yaml`:
+Runners are matched by label. Check and Deploy run on `runner.labels` from the
+repository's `.github/pipeline.yaml`:
 
 ```yaml
 runner:
-  labels: [self-hosted, mainz-homelab, linux, x64]
+  labels: [self-hosted, mainz-homelab]
 ```
 
-This routes the `static-checks`, `verify` and `deploy-docker` jobs to the
-homelab runner; it defaults to `ubuntu-latest` when omitted.
+Without that key they run on the variable `PIPELINE_RUNNER` (a JSON array,
+`["self-hosted","mainz-homelab"]` in both homelab orgs; on a Free org it has to
+be set per repository), and on `ubuntu-latest` when neither is set. Guard
+always runs on `ubuntu-latest`.
 
 > **Gotcha — do not set self-hosted labels on a repo with no matching runner.**
 > Jobs pinned to `self-hosted` labels queue **forever** if no runner is
-> registered/authorized for that repo. Only add `runner.labels` after the repo
-> is served by the org group (or has its own repo-scoped runner). Public repos
-> keep the default (`ubuntu-latest`).
+> registered or authorized for that repo. Public repos keep the default.
 
 ## Repos that build container images
 
-Most of the fleet (Node/Vercel apps, npm libraries, the WP theme) build **no**
-container image in CI, so the default runner runs with Docker disabled. Only a
-repo whose `pipeline.yaml` sets `deployment.provider: docker` (the `deploy-docker`
-job) needs to build images. Give those a **rootless BuildKit** sidecar
-(`--profile docker` in the stack) and point the build at it — never re-enable
-privileged dind.
+Only a repository with `deploy.provider: docker-ghcr` builds an image, in
+Deploy. That needs a Docker daemon on the runner: the edilio runner has one,
+the two navigaite runners have none. A navigaite repository that builds images
+runs Deploy on a GitHub-hosted runner or on a repo-scoped runner of its own
+with a daemon inside.
+
+On a self-hosted runner the buildx layer cache defaults to
+`deploy.docker.cache_backend: local`, a directory on the work volume, instead
+of uploading every layer to GitHub.
 
 ## Caches on the work volume
 
@@ -138,7 +145,8 @@ then enforces a size cap on each cache — 6 GB npm,
 by deleting a cache that is over it; it refills on the next job. None of
 these tools evicts by size on its own, so the cap is the bound. It also keeps
 the four newest versions of each tool, drops a buildx scope nothing has
-written for 14 days, and prunes the edilio runner's own daemon. `DRY_RUN=1`
+written for 14 days, removes the workspace of a repository no job has
+touched for 30 days, and prunes the edilio runner's own daemon. `DRY_RUN=1`
 prints and changes nothing.
 
 Do not add `pnpm store prune` to it. pnpm keeps a package only while some
