@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.5.2](https://github.com/maxbec/pipeline/compare/v5.5.1...v5.5.2) (2026-11-14)
+
+
+### 🐛 Bug Fixes
+
+* **train:** choose the merge method a main-only repository allows ([#152](https://github.com/maxbec/pipeline/issues/152)) ([6b71938](https://github.com/maxbec/pipeline/commit/6b719383dc027f53268175cb9ba0b67d45fbe050))
+
+
+### 📝 Documentation
+
+* say that the release train here owns versioning and releases ([#154](https://github.com/maxbec/pipeline/issues/154)) ([7a865a8](https://github.com/maxbec/pipeline/commit/7a865a8f9c963674a1ee416de06b143421219e38))
+
 ## [5.5.2-beta.1](https://github.com/maxbec/pipeline/compare/v5.5.1...v5.5.2-beta.1) (2026-11-14)
 
 
