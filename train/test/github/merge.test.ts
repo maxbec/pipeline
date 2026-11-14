@@ -4,6 +4,8 @@ import { join } from "node:path"
 import { test } from "node:test"
 import { GitHubClient } from "../../src/github/client.ts"
 import {
+  allowedMergeMethodsOf,
+  chooseMergeMethod,
   createSignedCommit,
   mergeMethodFor,
   repositoryKindOf,
@@ -175,4 +177,65 @@ test("repositoryKindOf reads dev off GitHub: present is major, a 404 is small", 
   assert.match(major.calls[0]?.url ?? "", /\/repos\/acme\/widgets\/branches\/dev$/)
   const small = fakeGitHub([{ status: 404, body: { message: "Branch not found" } }])
   assert.equal(await repositoryKindOf(small.client, repo), "small")
+})
+
+test("repositoryKindOf is small when GitHub answers branches/dev with another branch", async () => {
+  // A repository whose `dev` was renamed to `main` answers `GET /branches/dev`
+  // with a redirect to `main`, and fetch follows it: 200, `name: "main"`
+  // (measured on navigaite/nvgt-trunk-plugin). There is no `dev` there.
+  const renamed = fakeGitHub([{ body: { name: "main", commit: { sha: "abc" } } }])
+  assert.equal(await repositoryKindOf(renamed.client, repo), "small")
+})
+
+test("allowedMergeMethodsOf reads the repository's settings; a setting the token cannot see counts as allowed", async () => {
+  const squashOnly = fakeGitHub([
+    { body: { allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false } },
+  ])
+  assert.deepEqual(await allowedMergeMethodsOf(squashOnly.client, repo), {
+    squash: true,
+    merge: false,
+  })
+  assert.match(squashOnly.calls[0]?.url ?? "", /\/repos\/acme\/widgets$/)
+  const hidden = fakeGitHub([{ body: { name: "widgets" } }])
+  assert.deepEqual(await allowedMergeMethodsOf(hidden.client, repo), { squash: true, merge: true })
+})
+
+test("chooseMergeMethod: the policy's method where the repository allows it", () => {
+  const both = { squash: true, merge: true }
+  const choose = (headRefName: string, baseRefName: string, kind: "major" | "small") =>
+    chooseMergeMethod({ headRefName, baseRefName }, kind, both)
+  // A repository whose only branch is main: everything squashes.
+  assert.deepEqual(choose("chore/slim-pipeline", "main", "small"), { ok: true, method: "squash" })
+  assert.deepEqual(choose(releaseHeadFor("main"), "main", "small"), { ok: true, method: "squash" })
+  // A repository with dev: a promotion is a merge commit, feature work squashes.
+  assert.deepEqual(choose("dev", "main", "major"), { ok: true, method: "merge" })
+  assert.deepEqual(choose(PROMOTION_HEAD, "main", "major"), { ok: true, method: "merge" })
+  assert.deepEqual(choose("hotfix/y", "main", "major"), { ok: true, method: "merge" })
+  assert.deepEqual(choose(releaseHeadFor("main"), "main", "major"), { ok: true, method: "merge" })
+  assert.deepEqual(choose("feat/x", "dev", "major"), { ok: true, method: "squash" })
+})
+
+test("chooseMergeMethod falls back to the method the repository allows, and says so", () => {
+  const promotion = chooseMergeMethod({ headRefName: "dev", baseRefName: "main" }, "major", {
+    squash: true,
+    merge: false,
+  })
+  assert.equal(promotion.ok, true)
+  assert.equal(promotion.ok && promotion.method, "squash")
+  assert.match((promotion.ok && promotion.fallback) || "", /merge commits are not allowed/)
+  const feature = chooseMergeMethod({ headRefName: "feat/x", baseRefName: "dev" }, "major", {
+    squash: false,
+    merge: true,
+  })
+  assert.equal(feature.ok && feature.method, "merge")
+  assert.match((feature.ok && feature.fallback) || "", /squash merges are not allowed/)
+})
+
+test("chooseMergeMethod refuses when the repository allows neither squash nor merge commits", () => {
+  const verdict = chooseMergeMethod({ headRefName: "feat/x", baseRefName: "main" }, "small", {
+    squash: false,
+    merge: false,
+  })
+  assert.equal(verdict.ok, false)
+  assert.match((!verdict.ok && verdict.reason) || "", /neither squash merges nor merge commits/)
 })

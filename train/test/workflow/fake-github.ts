@@ -585,6 +585,10 @@ export class FakeGitHub {
         throw fail(405, "Pull Request is not mergeable")
       if (body?.merge_method !== "squash" && body?.merge_method !== "merge")
         throw fail(405, "only squash and merge commits here")
+      // GitHub's own refusal of a method the repository's settings switch off.
+      const setting = body.merge_method === "squash" ? "allow_squash_merge" : "allow_merge_commit"
+      if (this.settings[setting] === false)
+        throw fail(405, `${body.merge_method} merges are not allowed on this repository.`)
       const sha =
         body.merge_method === "merge"
           ? this.#mergeCommit(

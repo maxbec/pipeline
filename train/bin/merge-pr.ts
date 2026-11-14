@@ -6,8 +6,10 @@
  *
  * Reads the PR deterministically, prints the verdict, merges pinned to the
  * head it decided on — by merge commit for a promotion, a backmerge and
- * anything into `main` of a major repository, squashed otherwise
- * (`mergeMethodFor`; `--method` overrides it) — then reads
+ * anything into `main` of a repository that has `dev`, squashed otherwise,
+ * and by the other of the two where the repository's settings switch that
+ * one off (`chooseMergeMethod`; `--method` overrides it; a repository that
+ * allows neither is refused at exit 1) — then reads
  * the merge commit back and prints whether GitHub verified its signature —
  * the property `required_signatures` actually checks. When the only blocker
  * is a required context the repository does not emit yet, it prints the
@@ -26,8 +28,10 @@ import { parseArgs } from "node:util"
 import { envTokenProvider, ghCliTokenProvider } from "../src/github/app-auth.ts"
 import { GitHubClient } from "../src/github/client.ts"
 import {
+  allowedMergeMethodsOf,
+  chooseMergeMethod,
   type MergeMethod,
-  mergeMethodFor,
+  type MergeMethodChoice,
   mergePullRequest,
   repositoryKindOf,
   verifyCommitSigned,
@@ -74,9 +78,25 @@ const repo = { owner, name }
 
 const state = await getPrState(client, repo, number)
 const verdict = canMerge(state)
-const method: MergeMethod =
-  (values.method as MergeMethod | undefined) ??
-  mergeMethodFor(state, await repositoryKindOf(client, repo))
+// An explicit --method is the operator's and is not second-guessed.
+const choice: MergeMethodChoice = values.method
+  ? { ok: true, method: values.method as MergeMethod }
+  : chooseMergeMethod(
+      state,
+      await repositoryKindOf(client, repo),
+      await allowedMergeMethodsOf(client, repo),
+    )
+if (!choice.ok) {
+  console.log(
+    JSON.stringify(
+      { pr: `${slug}#${number}`, verdict: { ok: false, reason: choice.reason } },
+      null,
+      2,
+    ),
+  )
+  process.exit(1)
+}
+const method = choice.method
 const need = releaseApprovalFor(state)
 console.log(
   JSON.stringify(
@@ -88,6 +108,7 @@ console.log(
       mergeStateStatus: state.mergeStateStatus,
       signed: state.signed,
       method,
+      ...(choice.fallback ? { methodFallback: choice.fallback } : {}),
       checks: state.checks.map((c) => `${c.name}=${c.conclusion ?? c.status}`),
       verdict,
       releaseApproval: need.required
