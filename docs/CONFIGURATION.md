@@ -63,7 +63,7 @@ deploy:
     hook: false # fire the RENDER_DEPLOY_HOOK secret after the production Docker deploy
 
 release: # optional; read by the Train workflow, validated by Guard
-  version_files: [package.json] # the files that carry the version, non-empty list of paths
+  version_files: [package.json] # the files that carry the version; [] releases with tag and changelog only
   changelog_show_hidden: false # also list chore/ci/test/… entries in the changelog
   release_as: 2.0.0 # force the next version to X.Y.Z; ignored once a tag at or above it exists
 ```
@@ -84,7 +84,7 @@ a typo fails the pull request that makes it rather than a release weeks later:
 
 | key | type | meaning |
 |---|---|---|
-| `version_files` | non-empty list of non-empty strings | files whose version the Release PR bumps |
+| `version_files` | list of non-empty strings | files whose version the Release PR bumps; an empty list means no file carries one, and a release is the tag and the changelog |
 | `changelog_show_hidden` | `true` or `false` | include the normally hidden commit types in the changelog |
 | `release_as` | string `X.Y.Z` | the next version, overriding the one derived from the PR titles |
 

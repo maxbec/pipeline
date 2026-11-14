@@ -260,6 +260,11 @@ test("a release: block is validated, not refused", () => {
   )
   assert.equal(r.status, 0, r.stdout + r.stderr)
   assert.equal(parse(`version: '3'\nrelease: {}\n`).status, 0, "an empty block is fine")
+  assert.equal(
+    parse(`version: '3'\nrelease:\n  version_files: []\n`).status,
+    0,
+    "an empty list releases with the tag and the changelog only",
+  )
   assert.equal(parse(`version: '3'\nrelease:\n  release_as: '10.20.30'\n`).status, 0, "a quoted version is a string too")
 })
 
@@ -267,7 +272,6 @@ test("an unknown or mistyped release key fails Guard and names the key", () => {
   const bad = [
     [`release:\n  versionFiles: [package.json]\n`, /release\.versionFiles/],
     [`release:\n  version_files: package.json\n`, /release\.version_files/],
-    [`release:\n  version_files: []\n`, /release\.version_files/],
     [`release:\n  version_files: [package.json, 3]\n`, /release\.version_files/],
     [`release:\n  version_files: ['']\n`, /release\.version_files/],
     [`release:\n  changelog_show_hidden: 'yes'\n`, /release\.changelog_show_hidden/],
