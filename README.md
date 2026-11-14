@@ -48,7 +48,7 @@ and thereby triggers Deploy (ADR 0003 / 0004 there).
 
 ## Adopting it
 
-Two files, both written by `provisioning/migrate-repos.ts` in `maxbec/flaiky`:
+Two files, both written by `train/bin/migrate-repos.ts` (see `train/README.md`, "Fleet tool"):
 
 1. `.github/workflows/ci.yaml` — a copy of [`examples/caller.yaml`](.github/workflows/examples/caller.yaml)
    with the SHA and version filled in. The job id `pipeline` is what makes the
