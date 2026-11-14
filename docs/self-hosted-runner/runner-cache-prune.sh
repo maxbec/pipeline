@@ -7,8 +7,11 @@
 #   30 4 * * 0 bash /boot/config/plugins/user.scripts/scripts/runner-cache-prune/script >> /var/log/runner-cache-prune.log 2>&1
 #
 # Per runner, and only while it runs no job:
-#   1. tool-native garbage collection (npm cache verify, pnpm store prune),
-#      where the tools are there — it drops what nothing references any more;
+#   1. `npm cache verify`, which drops what the cache index no longer references.
+#      Deliberately not `pnpm store prune`: it keeps a package only while a
+#      node_modules hard-links to it, and on these btrfs volumes pnpm clones
+#      (reflinks) instead, so every package looks unused — it emptied the
+#      whole edilio store when tried (2026-11-14);
 #   2. a size cap on every cache: one that is still over its cap is deleted
 #      whole and refills on the next job. That is what bounds the volume —
 #      none of these caches can evict by age or size on its own;
@@ -59,18 +62,14 @@ cap() { # cap <dir> <limit in MB>
 }
 
 native_gc() { # native_gc <container>
-  [[ $DRY_RUN == 1 ]] && { log "  would run npm cache verify and pnpm store prune"; return 0; }
+  [[ $DRY_RUN == 1 ]] && { log "  would run npm cache verify"; return 0; }
   docker exec "$1" sh -c '
     node_bin=$(ls -d /_work/_tool/node/*/x64/bin 2>/dev/null | sort -V | tail -1)
-    [ -n "$node_bin" ] || { echo "  no Node in the tool cache yet, skipping npm and pnpm"; exit 0; }
-    PATH="$node_bin:/root/setup-pnpm/node_modules/.bin:$PATH"
+    [ -n "$node_bin" ] || { echo "  no Node in the tool cache yet, skipping npm cache verify"; exit 0; }
+    PATH="$node_bin:$PATH"
     export PATH
-    [ -d "$npm_config_cache" ] && npm cache verify 2>&1 | sed "s/^/  npm: /"
-    if command -v pnpm >/dev/null 2>&1 && [ -d /_work/.pnpm-store ]; then
-      cd /_work && pnpm store prune 2>&1 | tail -n 2 | sed "s/^/  pnpm: /"
-    else
-      echo "  no pnpm in the runner (none until a pnpm job has run in this container), store left to its cap"
-    fi' || log "  tool-native collection failed; the caps below still apply"
+    if [ -d "$npm_config_cache" ]; then npm cache verify 2>&1 | sed "s/^/  npm: /"; fi' \
+    || log "  npm cache verify failed; the caps below still apply"
 }
 
 prune_tools() { # prune_tools <tool cache>

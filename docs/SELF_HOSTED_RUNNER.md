@@ -125,14 +125,20 @@ ssh unraid 'bash -s -- gh-runner-navigaite-homelab' < docs/self-hosted-runner/re
 [`self-hosted-runner/runner-cache-prune.sh`](./self-hosted-runner/runner-cache-prune.sh),
 deployed as the User Script `runner-cache-prune` on unraid and run weekly
 (Sunday 04:30, `/boot/config/plugins/dynamix/runner-cache-prune.cron`, log in
-`/var/log/runner-cache-prune.log`). Per idle runner it runs `npm cache verify`
-and `pnpm store prune`, then enforces a size cap on each cache — 6 GB npm,
+`/var/log/runner-cache-prune.log`). Per idle runner it runs `npm cache verify`,
+then enforces a size cap on each cache — 6 GB npm,
 6 GB pnpm store, 4 GB per directory under `.cache`, 10 GB per buildx scope —
 by deleting a cache that is over it; it refills on the next job. None of
 these tools evicts by size on its own, so the cap is the bound. It also keeps
 the four newest versions of each tool, drops a buildx scope nothing has
 written for 14 days, and prunes the edilio runner's own daemon. `DRY_RUN=1`
 prints and changes nothing.
+
+Do not add `pnpm store prune` to it. pnpm keeps a package only while some
+`node_modules` hard-links to it, and on these btrfs volumes it clones
+(reflinks) packages instead, so every file has a link count of one and the
+whole store counts as unused: tried on the edilio runner on 2026-11-14, it
+removed all 3,389 packages.
 
 Measured on 2026-11-13 with a Check of navigaite/maimaldrei-dispoplaner on an
 otherwise idle runner: install 22 s and trunk lint 10 s with the caches in the
