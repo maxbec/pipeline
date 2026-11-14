@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.5.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.5.0-beta.1...v5.5.0-beta.2) (2026-11-14)
+
+
+### 🐛 Bug Fixes
+
+* **guard:** accept an empty release.version_files list ([#145](https://github.com/maxbec/pipeline/issues/145)) ([b9e45b8](https://github.com/maxbec/pipeline/commit/b9e45b8543e87542c373572b9875a4481652cc25))
+
 ## [5.5.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.4.2...v5.5.0-beta.1) (2026-11-14)
 
 
