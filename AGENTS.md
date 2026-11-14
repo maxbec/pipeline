@@ -14,7 +14,7 @@ Versioning, release PRs, tags, changelogs and promotion are Flaiky's
 .github/workflows/universal-pipeline.yaml   the three jobs; all logic is inline `run:` blocks
 .github/workflows/examples/caller.yaml      the caller every repository carries (rendered by Flaiky)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
-.github/workflows/train.yaml                the release train: a second reusable workflow, one job running train/bin
+.github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge) and the three Fix jobs, all running train/bin
 .github/workflows/examples/train-caller.yaml   its caller (workflow_run, dispatch, schedule; never pull_request)
 .github/workflows/train-self.yaml           this repo's Train caller: uses ./.github/workflows/train.yaml
 .github/workflows/train-sweep.yaml          central sweep over the owner's other repositories; runs scripts/train-sweep.sh
@@ -68,6 +68,9 @@ scripts/                                    repo bootstrap and org maintenance h
    `scripts/train-sweep.sh` prints indexes, counts and exit codes only.
 9. **The train never runs on a `pull_request` event** and never with the job's
    own token: writes go through the App token, or they start no workflow.
+10. **Content a pull request controls never shares a job with a token that can
+    write.** Fix (propose) has the tree, the log and the Claude token and
+    executes nothing; Fix (commit) has the App token and checks nothing out.
 
 ## 5. Testing
 

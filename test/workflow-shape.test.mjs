@@ -260,12 +260,15 @@ const READY = "steps.ready.outputs.ready == 'true'"
 const trainSteps = () => yaml(TRAIN).jobs.train.steps
 const usesStep = (steps, action) => steps.filter((s) => String(s.uses ?? "").startsWith(`${action}@`))
 
-test("the train is a second reusable workflow with one read-only job", () => {
+test("the train is a second reusable workflow whose jobs are all read-only", () => {
   const doc = yaml(TRAIN)
   assert.equal(doc.name, "Train")
   assert.deepEqual(Object.keys(doc.on), ["workflow_call"], "workflow_call only")
   assert.deepEqual(doc.permissions, {}, "nothing at the top level")
-  assert.deepEqual(Object.keys(doc.jobs), ["train"])
+  assert.deepEqual(Object.keys(doc.jobs), ["train", "fix-triage", "fix-propose", "fix-commit"])
+  for (const [id, j] of Object.entries(doc.jobs)) {
+    assert.deepEqual(j.permissions, { contents: "read" }, `${id}: the job's own token only reads`)
+  }
   const job = doc.jobs.train
   assert.equal(job.name, "Train")
   assert.deepEqual(job.permissions, { contents: "read" }, "everything that writes goes through the App token")
@@ -489,4 +492,249 @@ test("the central sweep runs only here, on a timer or by hand, GitHub-hosted", (
   assert.equal(run.env.GH_TOKEN, "${{ steps.app-token.outputs.token }}")
   assert.equal(run.env.SWEEP_SELF, "${{ github.repository }}")
   assert.ok(existsSync(join(ROOT, "scripts/train-sweep.sh")))
+})
+
+// ---- Fix -------------------------------------------------------------------
+
+const FIX_JOBS = ["fix-triage", "fix-propose", "fix-commit"]
+const fixJob = (id) => yaml(TRAIN).jobs[id]
+const PIPELINE_CHECKOUT = {
+  repository: "maxbec/pipeline",
+  ref: "${{ job.workflow_sha }}",
+  path: ".pipeline",
+  "sparse-checkout": "train",
+  "persist-credentials": false,
+}
+
+test("the Fix is three jobs with read-only tokens, named for what they do", () => {
+  assert.deepEqual(
+    FIX_JOBS.map((id) => fixJob(id).name),
+    ["Fix (triage)", "Fix (propose)", "Fix (commit)"],
+  )
+  for (const id of FIX_JOBS) {
+    const job = fixJob(id)
+    assert.deepEqual(job.permissions, { contents: "read" }, id)
+    assert.ok(job["timeout-minutes"] <= 20, `${id} has a time limit`)
+  }
+  assert.equal(fixJob("fix-propose")["timeout-minutes"], 20)
+})
+
+test("the Fix starts only on a pull request's Pipeline run that concluded failure", () => {
+  const cond = String(fixJob("fix-triage").if).replace(/\s+/g, " ")
+  assert.equal(
+    cond,
+    "github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request'",
+  )
+  // The other two hang on triage's verdict, which only that condition produces.
+  const propose = fixJob("fix-propose")
+  assert.deepEqual([].concat(propose.needs), ["fix-triage"])
+  assert.equal(propose.if, "needs.fix-triage.outputs.action == 'propose'")
+  const commit = fixJob("fix-commit")
+  assert.deepEqual(commit.needs, ["fix-triage", "fix-propose"])
+  assert.equal(commit.if, "always() && needs.fix-triage.outputs.action == 'propose'", "it reports even when propose failed")
+  assert.deepEqual(fixJob("fix-triage").outputs, {
+    action: "${{ steps.triage.outputs.action }}",
+    pr: "${{ steps.triage.outputs.pr }}",
+    head_sha: "${{ steps.triage.outputs.head_sha }}",
+    attempt: "${{ steps.triage.outputs.attempt }}",
+  })
+})
+
+test("triage and commit run where the train runs; propose always on a fresh hosted VM", () => {
+  const train = yaml(TRAIN).jobs.train["runs-on"]
+  assert.equal(fixJob("fix-triage")["runs-on"], train)
+  assert.equal(fixJob("fix-commit")["runs-on"], train)
+  assert.equal(fixJob("fix-propose")["runs-on"], "ubuntu-latest")
+})
+
+test("triage and commit follow the train's pattern: ready gate, scoped App token, the train's code, Node", () => {
+  const [trainReady] = trainSteps()
+  const trainMint = usesStep(trainSteps(), "actions/create-github-app-token")[0]
+  const scopes = {
+    "fix-triage": { "permission-actions": "write", "permission-pull-requests": "write", "permission-issues": "write" },
+    "fix-commit": { "permission-contents": "write", "permission-pull-requests": "write", "permission-issues": "write" },
+  }
+  for (const [id, permissions] of Object.entries(scopes)) {
+    const steps = fixJob(id).steps
+    assert.deepEqual(steps[0], trainReady, `${id}: the same gate as the train`)
+    for (const step of steps.slice(1)) {
+      // The upload hangs on triage's output, which exists only past the gate.
+      if (step.if === "steps.triage.outputs.action == 'propose'") continue
+      assert.equal(step.if, READY, `${id} "${step.name}" is skipped without the App secrets`)
+    }
+    const [mint, ...more] = usesStep(steps, "actions/create-github-app-token")
+    assert.ok(mint && more.length === 0, `${id}: exactly one App-token step`)
+    assert.equal(mint.uses, trainMint.uses, "one pin")
+    assert.deepEqual(mint.with, { ...trainMint.with, ...permissions }, `${id}: the token is scoped`)
+    const checkouts = usesStep(steps, "actions/checkout")
+    assert.equal(checkouts.length, 1, `${id}: the train's code and nothing else is checked out`)
+    assert.deepEqual(checkouts[0].with, PIPELINE_CHECKOUT)
+    assert.equal(usesStep(steps, "actions/setup-node").length, 1, id)
+  }
+})
+
+test("triage hands the run to the entry and uploads its input only for a proposal", () => {
+  const steps = fixJob("fix-triage").steps
+  const triage = steps.find((s) => s.id === "triage")
+  assert.equal(triage.run.trim(), "node .pipeline/train/bin/fix.ts triage")
+  assert.deepEqual(triage.env, {
+    GITHUB_TOKEN: "${{ steps.app-token.outputs.token }}",
+    RUN_ID: "${{ github.event.workflow_run.id }}",
+    // The comparison's result, not the secret.
+    CLAUDE_AVAILABLE: "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}",
+    FIX_INPUT_DIR: "${{ runner.temp }}/fix-input",
+  })
+  const [upload] = usesStep(steps, "actions/upload-artifact")
+  assert.equal(upload.if, "steps.triage.outputs.action == 'propose'")
+  assert.equal(upload.with.name, "fix-input")
+  assert.equal(upload.with.path, triage.env.FIX_INPUT_DIR)
+})
+
+test("the propose job never holds a token that can write", () => {
+  const job = fixJob("fix-propose")
+  const text = JSON.stringify(job)
+  assert.doesNotMatch(text, /TRAIN_APP|steps\.app-token|create-github-app-token|GITHUB_TOKEN|github\.token/)
+  for (const step of usesStep(job.steps, "actions/checkout")) {
+    assert.equal(step.with["persist-credentials"], false, step.name)
+    assert.equal(step.with.token, undefined, step.name)
+  }
+})
+
+test("the propose job executes nothing from the pull request", () => {
+  const steps = fixJob("fix-propose").steps
+  const index = (pred) => steps.findIndex(pred)
+  const tree = index((s) => String(s.uses ?? "").startsWith("actions/checkout@") && !s.with.repository)
+  assert.equal(steps[tree].with.ref, "${{ needs.fix-triage.outputs.head_sha }}", "the head triage decided on")
+
+  // The one package-manager call installs the pinned CLI, before the tree exists and away from it.
+  const managers = steps.filter((s) => /\b(npm|pnpm|yarn|bun|npx|pip|uv|make)\b/.test(s.run ?? ""))
+  assert.deepEqual(managers.map((s) => s.id), ["install"])
+  const install = managers[0]
+  assert.ok(index((s) => s.id === "install") < tree, "installed before the checkout")
+  assert.equal(install["working-directory"], "${{ runner.temp }}")
+  assert.match(install.env.CLAUDE_CODE_VERSION, /^\d+\.\d+\.\d+$/, "an exact version")
+  assert.match(install.run, /npm install --global --registry=https:\/\/registry\.npmjs\.org\/ "@anthropic-ai\/claude-code@\$\{CLAUDE_CODE_VERSION\}"/)
+  for (const step of steps) {
+    assert.doesNotMatch(step.run ?? "", /\b(install|ci|test|run|exec|build)\b(?! --global)/, `"${step.name}" runs a package script`)
+  }
+
+  // The train's code is checked out after Claude Code ran, into a path emptied first.
+  const claude = index((s) => s.id === "claude")
+  const clear = index((s) => (s.run ?? "").trim() === "rm -rf -- .pipeline")
+  const pipeline = index((s) => String(s.uses ?? "").startsWith("actions/checkout@") && s.with.repository)
+  const collect = index((s) => s.id === "collect")
+  assert.ok(tree < claude && claude < clear && clear < pipeline && pipeline < collect, "order")
+  assert.deepEqual(steps[pipeline].with, PIPELINE_CHECKOUT)
+  assert.equal(steps[collect].run.trim(), 'node .pipeline/train/bin/fix.ts collect "$RUNNER_TEMP/claude-output.json"')
+  assert.deepEqual(steps[collect].env, {
+    BASE_SHA: "${{ needs.fix-triage.outputs.head_sha }}",
+    FIX_OUTPUT_DIR: "${{ runner.temp }}/fix-output",
+  })
+  // Nothing the job adds lands in the tree it compares.
+  for (const step of steps) {
+    if (/(upload|download)-artifact@/.test(step.uses ?? "")) assert.match(step.with.path, /^\$\{\{ runner\.temp \}\}\//)
+  }
+})
+
+test("Claude Code runs headless with four tools, no prompt, a turn cap, and the token in that step alone", () => {
+  const doc = yaml(TRAIN)
+  const all = Object.values(doc.jobs).flatMap((j) => j.steps)
+  const holders = all.filter((s) => Object.keys(s.env ?? {}).includes("CLAUDE_CODE_OAUTH_TOKEN"))
+  assert.equal(holders.length, 1, "exactly one step has the token in its environment")
+  const step = holders[0]
+  assert.equal(step.id, "claude")
+  assert.ok(
+    fixJob("fix-propose").steps.some((s) => s.id === "claude" && "CLAUDE_CODE_OAUTH_TOKEN" in (s.env ?? {})),
+    "and that step is in the propose job",
+  )
+  // Beyond that step the secret is only ever compared with the empty string.
+  const mentions = all.flatMap((s) => Object.values({ ...s.env, ...s.with })).filter((v) => String(v).includes("CLAUDE_CODE_OAUTH_TOKEN"))
+  assert.deepEqual(mentions.sort(), ["${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}", "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"])
+
+  assert.equal(step.env.ANTHROPIC_API_KEY, "", "a key would win over the subscription token")
+  assert.equal(step.env.ANTHROPIC_AUTH_TOKEN, "")
+  assert.equal(step["continue-on-error"], true, "a failed run is a diagnosis, not a red job")
+  const cmd = step.run.replace(/\\\n\s*/g, " ")
+  assert.match(cmd, /timeout 15m claude -p "[^"$]+" /, "print mode, a fixed prompt")
+  assert.doesNotMatch(cmd, /--bare|--dangerously-skip-permissions|bypassPermissions|acceptEdits|--add-dir|--mcp-config/)
+  for (const flag of [
+    "--safe-mode",
+    "--setting-sources user",
+    '--settings "$RUNNER_TEMP/claude-settings.json"',
+    '--tools "Read,Edit,Glob,Grep"',
+    '--allowedTools "Edit(/**)"',
+    '--disallowedTools "mcp__*"',
+    "--permission-mode dontAsk",
+    "--max-turns 30",
+    "--no-session-persistence",
+    "--output-format json",
+    '< "$RUNNER_TEMP/fix-input/prompt.txt"',
+    '> "$RUNNER_TEMP/claude-output.json"',
+  ]) {
+    assert.ok(cmd.includes(` ${flag}`), `missing: ${flag}`)
+  }
+})
+
+test("Claude Code's settings confine the file tools to the checkout and deny everything else", () => {
+  const dir = scratch()
+  const home = join(dir, "home")
+  mkdirSync(home)
+  const r = runStep(
+    "fix-propose",
+    "claude-settings",
+    { HOME: home, RUNNER_TEMP: dir, GITHUB_WORKSPACE: "/home/runner/work/widgets/widgets" },
+    TRAIN,
+  )
+  assert.equal(r.status, 0, r.stderr)
+  const text = readFileSync(join(dir, "claude-settings.json"), "utf8")
+  assert.equal(readFileSync(join(home, ".claude/settings.json"), "utf8"), text, "also the user settings, the one source the run loads")
+  const settings = JSON.parse(text)
+  assert.equal(settings.disableAllHooks, true)
+  const p = settings.permissions
+  assert.equal(p.defaultMode, "dontAsk")
+  assert.equal(p.blockReadsOutsideWorkingDirectories, true)
+  assert.equal(p.blockWritesOutsideWorkingDirectories, true)
+  assert.deepEqual(p.allow, ["Edit(//home/runner/work/widgets/widgets/**)"], "no Bash, no bare Read or Edit")
+  for (const rule of [
+    "Bash",
+    "WebFetch",
+    "WebSearch",
+    "mcp__*",
+    "Read(//proc/**)",
+    "Read(//etc/**)",
+    "Read(//tmp/**)",
+    `Read(/${dir}/**)`,
+    "Read(~/.claude/**)",
+    "Read(~/.config/**)",
+    "Read(~/.ssh/**)",
+    "Edit(//home/runner/work/widgets/widgets/.git/**)",
+    "Edit(//home/runner/work/widgets/widgets/.github/**)",
+  ]) {
+    assert.ok(p.deny.includes(rule), `not denied: ${rule}`)
+  }
+})
+
+test("the commit job never checks the repository out and reports even without a proposal", () => {
+  const steps = fixJob("fix-commit").steps
+  for (const step of usesStep(steps, "actions/checkout")) {
+    assert.equal(step.with.repository, "maxbec/pipeline", "only the train's code")
+  }
+  assert.doesNotMatch(JSON.stringify(steps), /\bgit (clone|fetch|checkout|pull)\b|CLAUDE/)
+  const [download] = usesStep(steps, "actions/download-artifact")
+  assert.equal(download.with.name, "fix-output")
+  assert.equal(download["continue-on-error"], true, "a missing artifact is a failed propose job, not a failed commit job")
+  const commit = steps.find((s) => s.id === "commit")
+  assert.equal(commit.run.trim(), "node .pipeline/train/bin/fix.ts commit")
+  assert.deepEqual(commit.env, {
+    GITHUB_TOKEN: "${{ steps.app-token.outputs.token }}",
+    PR: "${{ needs.fix-triage.outputs.pr }}",
+    HEAD_SHA: "${{ needs.fix-triage.outputs.head_sha }}",
+    ATTEMPT: "${{ needs.fix-triage.outputs.attempt }}",
+    FIX_OUTPUT_DIR: download.with.path,
+  })
+  // What propose uploads is what commit downloads.
+  const upload = usesStep(fixJob("fix-propose").steps, "actions/upload-artifact")[0]
+  assert.equal(upload.with.name, "fix-output")
+  assert.equal(upload.with.path, download.with.path)
+  assert.equal(upload.if, "always()")
 })
