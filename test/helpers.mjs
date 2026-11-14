@@ -40,10 +40,11 @@ export function stepScript(job, id, file = WORKFLOW) {
 /**
  * Run a `run:` block under bash with the given env. GITHUB_OUTPUT is a scratch
  * file; its `key=value` lines come back parsed. Multiline outputs use the
- * `key<<EOF` heredoc form GitHub accepts.
+ * `key<<EOF` heredoc form GitHub accepts. `file` is the workflow to read the
+ * step from; the universal pipeline unless given.
  */
-export function runStep(job, id, env = {}) {
-  const script = stepScript(job, id)
+export function runStep(job, id, env = {}, file = WORKFLOW) {
+  const script = stepScript(job, id, file)
   if (script === null) throw new Error(`no step ${job}.${id} with a run: block`)
   const dir = scratch()
   const outputFile = join(dir, "output")

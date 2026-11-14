@@ -1,0 +1,27 @@
+---
+# This repository runs the train it ships, from its own tree — the counterpart
+# of ci.yaml. Same triggers and kill switch as examples/train-caller.yaml.
+name: Train
+
+# No pull_request trigger: it would run the pull request's copy of this file
+# with the secrets. These three run the default branch's copy.
+on:
+  workflow_run:
+    workflows: [Pipeline]
+    types: [completed]
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'
+
+permissions: {}
+
+jobs:
+  train:
+    if: vars.TRAIN != 'off'
+    uses: ./.github/workflows/train.yaml
+    permissions:
+      contents: read
+    secrets:
+      TRAIN_APP_ID: ${{ secrets.TRAIN_APP_ID }}
+      TRAIN_APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
