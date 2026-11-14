@@ -122,7 +122,7 @@ credential and no app env.
 A second reusable workflow, `.github/workflows/train.yaml`, beside the
 pipeline. A repository opts in by carrying the caller
 `.github/workflows/examples/train-caller.yaml` as `.github/workflows/train.yaml`,
-pinned to the same commit as its Pipeline caller. One job, `train / Train`,
+pinned to the same commit as its Pipeline caller. Its main job, `train / Train`,
 runs two steps over the whole repository — the event is only a poke:
 
 - **Release** keeps one Release PR per branch up to date, and tags and
@@ -132,7 +132,7 @@ runs two steps over the whole repository — the event is only a poke:
 
 | trigger | why |
 |---|---|
-| `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. Red, cancelled and release runs start nothing |
+| `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. A red pull request run starts the Fix, below; cancelled and release runs start nothing |
 | `workflow_dispatch` | after resolving review threads or removing a label without a push: `gh workflow run train.yaml` |
 | `schedule`, every 30 minutes | what no event reports. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
 
@@ -154,11 +154,79 @@ Controls:
   the train acts as. Everything it writes goes through that App's installation
   token, scoped to the one repository; the job's own token is `contents: read`.
   Without both secrets every step is skipped and the job ends green, so the
-  caller can be rolled out first. **`CLAUDE_CODE_OAUTH_TOKEN`** is declared for
-  a later release and unused today.
+  caller can be rolled out first. **`CLAUDE_CODE_OAUTH_TOKEN`** belongs to the
+  Fix, below.
 
 The train runs on `vars.PIPELINE_RUNNER` in a private repository and always
 GitHub-hosted in a public one.
+
+### Fix
+
+When `pipeline / Check` fails on a pull request, three more jobs of the same
+workflow act on it. They start only on a finished Pipeline run of a pull
+request that concluded exactly `failure` — never on a dispatch or the
+schedule, and not for a cancelled or timed-out run.
+
+1. **Fix (triage)** reads the run and the pull request. It does nothing for a
+   fork, a draft, a head that has moved on since the run, a `release/*`,
+   `promote/*`, `backmerge/*` or `hotfix/*` head, a Dependabot pull request,
+   one labelled `hold` or `needs-human`, or a run whose failed job is Guard
+   (a wrong title or target is not something to patch). On the run's first
+   attempt it reruns the failed jobs once and stops.
+2. **Fix (propose)**, when the check is still red: Claude Code runs headless
+   on a checkout of the pull request's head, with the end of the failed job's
+   log (300 lines, 40 KB at most). It can read, search and edit files in that
+   checkout and nothing else: no shell, no network tool, no MCP server, and
+   none of the repository's own Claude Code configuration is loaded. Nothing
+   from the pull request is executed — no install, no test, no script. The
+   job always runs on a fresh GitHub-hosted VM and holds no token that can
+   write.
+3. **Fix (commit)** takes the proposed change, never the tree. If the head has
+   moved it does nothing. Otherwise the change goes through the guard and is
+   committed onto the head as one signed `fix:` commit, or it is refused. Either
+   way the diagnosis is posted as a comment. The commit starts the next
+   Pipeline run, which is the test of the fix.
+
+**Three attempts** per pull request, counted by the train's own comments. After
+the third, or as soon as a proposed change is refused, the pull request gets
+the label **`needs-human`** and the Fix leaves it alone
+until a person removes the label.
+
+**What a fix may never change.** It may edit only files the pull request
+itself already changes, and may not create or delete one. Among those it never
+touches:
+
+- anything under `.github/`, `.trunk/` or `.husky/`;
+- lockfiles;
+- `package.json`, `pyproject.toml`, `tsconfig*.json`, and lint, format and
+  test-runner configuration (`biome.json`, `eslint.config.*`, `.eslintrc*`,
+  `.prettierrc*`, `prettier*`, `jest.config.*`, `vitest.config.*`,
+  `playwright.config.*`, `pytest.ini`, `tox.ini`, `setup.cfg`,
+  `.editorconfig`);
+- a test file in a way that leaves it with fewer assertion lines or adds a
+  skip, `only`, `todo` or expected-failure marker;
+- any file in a way that adds a suppression (`@ts-ignore`, `eslint-disable`,
+  `# noqa`, `# type: ignore`, `nolint` and the like).
+
+Binary files, files over 200 KB, more than 20 files and content shaped like a
+credential are refused as well. The rules are mechanical and refuse some honest
+fixes; such a pull request waits for a person. No check, test or ruleset is
+ever weakened or switched off to get a pull request green.
+
+**Secrets.** The Fix needs the two App secrets above and
+**`CLAUDE_CODE_OAUTH_TOKEN`**, a token from `claude setup-token`. The App needs
+`actions: write` (the rerun), `contents: write` (the commit) and
+`pull requests: write` and `issues: write` (comment and label). Without the
+Claude token a red check still gets its one rerun and nothing more. Do not set
+an `ANTHROPIC_API_KEY` for this workflow: Claude Code would use it instead.
+
+The token is tied to the Claude subscription of whoever created it. Every
+proposal is billed to that subscription and draws on the same usage limits as
+that person's own sessions; there is no separate quota. A run that hits a rate
+limit, or a token that has expired (it lasts one year), does not fail the
+workflow: the diagnosis in the comment says that Claude Code did not finish,
+and the attempt counts. Because of that tie, set the token on private
+repositories only.
 
 ## Repository variables and secrets
 

@@ -152,4 +152,24 @@ error.
 
 ## Not here yet
 
-`bin/fix.ts` and the remaining hand scripts follow in later pull requests.
+The remaining hand scripts follow in later pull requests.
+
+## Fix
+
+`bin/fix.ts` and `src/fix/` are the Fix: what the train does when
+`pipeline / Check` fails on a pull request. Three subcommands, one per job of
+`train.yaml`:
+
+```
+fix.ts triage    src/fix/triage.ts, steps.ts   nothing, a rerun, a proposal, or giving up
+fix.ts collect   src/fix/collect.ts            what Claude Code changed in the tree, and its diagnosis
+fix.ts commit    src/fix/commit.ts, guard.ts   the guard, then one signed commit or a comment
+```
+
+`triage.ts` decides from the run and the pull request as GitHub reports them;
+`prompt.ts` builds the prompt around the failed job's log, fenced as untrusted
+data; `guard.ts` is the allowlist a proposed change has to pass. `collect`
+runs next to a tree the pull request controls and executes nothing from it;
+`commit` holds the token that writes and never has that tree. The tests in
+`test/fix/` run against `fix-world.ts`, the fake GitHub plus runs, jobs, logs,
+comments and labels.
