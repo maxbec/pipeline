@@ -111,13 +111,21 @@ docker rename "$NAME" "$PREV"
 # Seed the volume from the old layer so the first job is not a cold start.
 # The tool cache is left to refill: setup-python's builds carry their install
 # prefix, and a Node download takes seconds.
-seed() { # seed <path in the old container> <path on the volume>
-  if [[ ! -e $DATA/$2 ]] && docker cp -a "$PREV:$1" "$DATA/$2" 2>/dev/null; then
-    echo "seeded /_work/$2 from $1"
-  fi
+seed() { # seed <path in the old container> <path on the volume>; fails when nothing was copied
+  [[ ! -e $DATA/$2 ]] || return 1
+  docker cp -a "$PREV:$1" "$DATA/$2" 2>/dev/null || return 1
+  echo "seeded /_work/$2 from $1"
 }
-seed /root/.npm .npm
-seed /root/.cache .cache
+seed /root/.npm .npm || true
+if seed /root/.cache .cache; then
+  # trunk's cache cannot move: its Python linters (checkov, yamllint, semgrep)
+  # are venvs whose scripts start with `#!<old cache path>/…/bin/python`. A
+  # copied one fails every lint that needs them with "execve failed: No such
+  # file or directory" — four red Checks on 2026-11-13. It rebuilds itself in
+  # about 80 s on the first lint.
+  rm -rf "$DATA/.cache/trunk"
+  echo "dropped the copied trunk cache (not relocatable); the first lint rebuilds it"
+fi
 
 if ! docker run -d "${ARGS[@]}" "$IMAGE" >/dev/null; then
   echo "docker run failed; put the old container back with: $0 $NAME --rollback" >&2
