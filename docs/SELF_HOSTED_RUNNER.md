@@ -149,6 +149,20 @@ written for 14 days, removes the workspace of a repository no job has
 touched for 30 days, and prunes the edilio runner's own daemon. `DRY_RUN=1`
 prints and changes nothing.
 
+`prune-selftest.sh` runs the script against a throwaway volume of fake caches
+and checks what is left: every cap, the tool-version trim, both buildx rules
+and the workspace rule, dry and for real. Run it after changing the script,
+before deploying it:
+
+```bash
+ssh unraid 'bash -s' < docs/self-hosted-runner/prune-selftest.sh
+```
+
+It does not cover the runner's own daemon. That path ran for real on
+2026-11-14 on the edilio runner with the cap forced down, and removed the two
+unused images there; the container, volume and build-cache prunes have only
+ever run with nothing to remove.
+
 Do not add `pnpm store prune` to it. pnpm keeps a package only while some
 `node_modules` hard-links to it, and on these btrfs volumes it clones
 (reflinks) packages instead, so every file has a link count of one and the
