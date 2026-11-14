@@ -115,7 +115,14 @@ on the Docker host. It reads image, registration env, token, volume and the
 memory / CPU limits from the existing container (so limits set with
 `docker update` survive), adds the variables above, and keeps the old
 container, stopped, as `<name>-prev` until `--cleanup`; `--rollback` puts it
-back. It refuses while a job runs.
+back. It refuses while a job runs. It copies `~/.npm` and `~/.cache` from the
+old layer onto the volume when they are not there yet — except trunk's cache,
+which cannot be moved: its Python linters are venvs whose scripts name the old
+path in their shebang, and a copied cache fails every lint that needs checkov,
+yamllint or semgrep with `execve failed: No such file or directory` (seen in
+`<workspace>/.trunk/out/*.yaml`; four red Checks on 2026-11-13). If trunk ever
+reports "tools failed to run" on a runner, delete `/_work/.cache/trunk` while
+the runner is idle; the next lint rebuilds it in about 80 s.
 
 ```bash
 ssh unraid 'bash -s -- gh-runner-navigaite-homelab' < docs/self-hosted-runner/recreate-runner.sh
