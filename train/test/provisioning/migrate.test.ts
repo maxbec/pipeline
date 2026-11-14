@@ -1009,7 +1009,7 @@ test("the Train caller is rendered at the pin, without the marker lines, within 
     )
     for (const line of text.split("\n")) assert.ok(line.length <= 120, `${line.length}: ${line}`)
     assert.ok(text.endsWith("\n") && !text.endsWith("\n\n"))
-    assert.match(text, /\n {2}workflow_dispatch:\n/, "the other triggers stay")
+    assert.match(text, /\n {2}workflow_dispatch: \{\}\n/, "the other triggers stay")
     assert.match(text, /\npermissions: \{\}\n/)
   }
 })

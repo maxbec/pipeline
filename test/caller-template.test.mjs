@@ -98,3 +98,11 @@ test("the Train caller grants every permission the train job asks for, and forwa
     for (const s of declared) assert.equal(job.secrets[s], `\${{ secrets.${s} }}`, `${file}: ${s}`)
   }
 })
+
+test("the train caller template has no empty mapping value", () => {
+  // yamllint's empty-values rule, on in several repositories, fails the
+  // rendered caller on a bare `workflow_dispatch:`.
+  const text = readFileSync(new URL("../.github/workflows/examples/train-caller.yaml", import.meta.url), "utf8")
+  const bare = text.split("\n").filter((line) => /^\s*[\w-]+:\s*$/.test(line) && /^\s*workflow_dispatch:/.test(line))
+  assert.deepEqual(bare, [])
+})
