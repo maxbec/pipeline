@@ -3,10 +3,12 @@
 ## 1. What this is
 
 The reusable GitHub Actions workflow every repository across `navigaite`,
-`edilio-app` and `maxbec` calls, SHA-pinned. It answers one question — does the
-code check out, and does a published release deploy — and nothing else.
-Versioning, release PRs, tags, changelogs and promotion are Flaiky's
-(`maxbec/flaiky`, ADR 0003/0004/0009 there).
+`edilio-app` and `maxbec` calls, SHA-pinned. That workflow answers one question — does
+the code check out, and does a published release deploy. Versioning, release
+PRs, tags, changelogs, merging and promotion are the release train's: a second
+reusable workflow here, `.github/workflows/train.yaml`, with its code and
+tests in `train/` (see `train/README.md`; decisions in `maxbec/flaiky`,
+ADR 0003/0004/0009 and 0026–0028). Flaiky's runtime is retired.
 
 ## 2. Structure
 
@@ -62,7 +64,8 @@ scripts/                                    repo bootstrap and org maintenance h
    secrets, pushed by Infisical's Secret Sync; app env for a Vercel build
    comes from `vercel pull`. Check holds no deploy credential.
 6. **No release-please, no Flama, no promotion workflows here.** If a change
-   needs a version, Flaiky's release train handles it after merge.
+   needs a version, the release train (`train/`) handles it after merge;
+   the universal pipeline itself never versions.
 7. Exactly three environments: `development`, `preview`, `production`.
 8. **The sweep's log is public, the repositories it visits are not.**
    `scripts/train-sweep.sh` prints indexes, counts and exit codes only.
