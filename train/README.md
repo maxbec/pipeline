@@ -95,8 +95,13 @@ For every open pull request, in this order:
    **needs_human**.
 4. `canMerge`. Behind its base: the branch is updated once (**updated**). Not
    green: **blocked**. Green: merged, pinned to the head the verdict was made
-   on, squashed or by merge commit as `mergeMethodFor` says (**merged**), and
-   the merge commit's signature is read back.
+   on, squashed or by merge commit as `chooseMergeMethod` says (**merged**),
+   and the merge commit's signature is read back. The method is the policy's
+   (`mergeMethodFor`: a merge commit for a promotion, a backmerge and anything
+   into `main` of a repository that has `dev`; a squash otherwise, so always
+   on a repository whose only branch is `main`), unless the repository's
+   settings switch it off: then the other one is used and the reason says so.
+   A repository that allows neither is **blocked**.
 
 Output: one JSON line per pull request, `{"number":7,"action":"merged","reason":"…"}`,
 with `action` one of `merged`, `updated`, `waiting`, `skipped`, `needs_human`,

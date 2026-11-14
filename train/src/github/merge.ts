@@ -48,20 +48,90 @@ export function mergeMethodFor(
   return pr.headRefName === "dev" || pr.headRefName.startsWith("promote/") ? "merge" : "squash"
 }
 
+/** Which of the train's two methods a repository's settings let through. */
+export interface AllowedMergeMethods {
+  squash: boolean
+  merge: boolean
+}
+
+export type MergeMethodChoice =
+  /** `fallback` is set when the method is not the policy's, and says why. */
+  { ok: true; method: MergeMethod; fallback?: string } | { ok: false; reason: string }
+
+const METHOD_NOUN: Record<MergeMethod, string> = {
+  squash: "squash merges",
+  merge: "merge commits",
+}
+
+/**
+ * The method a PR is actually merged by: `mergeMethodFor`'s, unless the
+ * repository's settings switch that one off. GitHub answers a disallowed
+ * method with 405, so the one it allows is used instead and the choice says
+ * so. A repository that allows neither has nothing the train can merge by
+ * (rebase merges are not verified), and the choice is a refusal.
+ */
+export function chooseMergeMethod(
+  pr: { baseRefName: string; headRefName: string },
+  kind: RepositoryKind,
+  allowed: AllowedMergeMethods,
+): MergeMethodChoice {
+  const policy = mergeMethodFor(pr, kind)
+  if (allowed[policy]) return { ok: true, method: policy }
+  const other: MergeMethod = policy === "squash" ? "merge" : "squash"
+  if (allowed[other]) {
+    return {
+      ok: true,
+      method: other,
+      fallback: `${METHOD_NOUN[policy]} are not allowed on this repository; ${other} is the method it allows`,
+    }
+  }
+  return {
+    ok: false,
+    reason:
+      "the repository allows neither squash merges nor merge commits, and a rebase merge is not verified",
+  }
+}
+
 /**
  * A repository's kind as GitHub has it: major when `origin` has a `dev`
  * branch, the rule `discoverRepositories` applies to a clone.
+ *
+ * The answer's `name` is checked, not just its status: a repository whose
+ * `dev` was renamed answers `GET /branches/dev` with a redirect to the new
+ * name, which fetch follows to a 200 for a branch that is not `dev`.
  */
 export async function repositoryKindOf(
   client: GitHubClient,
   repo: RepoRef,
 ): Promise<RepositoryKind> {
   try {
-    await client.rest("GET", `/repos/${repo.owner}/${repo.name}/branches/dev`)
-    return "major"
+    const res = await client.rest<{ name?: string }>(
+      "GET",
+      `/repos/${repo.owner}/${repo.name}/branches/dev`,
+    )
+    return res.body?.name === "dev" ? "major" : "small"
   } catch (error) {
     if (error instanceof GitHubHttpError && error.status === 404) return "small"
     throw error
+  }
+}
+
+/**
+ * The repository's `allow_squash_merge` and `allow_merge_commit`. GitHub
+ * leaves both out for a token without push access; a setting that cannot be
+ * read counts as allowed, so the policy's method stands.
+ */
+export async function allowedMergeMethodsOf(
+  client: GitHubClient,
+  repo: RepoRef,
+): Promise<AllowedMergeMethods> {
+  const res = await client.rest<{ allow_squash_merge?: boolean; allow_merge_commit?: boolean }>(
+    "GET",
+    `/repos/${repo.owner}/${repo.name}`,
+  )
+  return {
+    squash: res.body?.allow_squash_merge !== false,
+    merge: res.body?.allow_merge_commit !== false,
   }
 }
 
