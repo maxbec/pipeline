@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.5.1](https://github.com/maxbec/pipeline/compare/v5.5.0...v5.5.1) (2026-11-14)
+
+
+### 🐛 Bug Fixes
+
+* **train:** render workflow_dispatch as an explicit empty mapping ([#148](https://github.com/maxbec/pipeline/issues/148)) ([4e6489a](https://github.com/maxbec/pipeline/commit/4e6489a4a6d0e93ddb2be15781b3a154dcbdbf36))
+
 ## [5.5.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.5.0...v5.5.1-beta.1) (2026-11-14)
 
 
