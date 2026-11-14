@@ -1,6 +1,11 @@
 ---
 # Navigaite hardened self-hosted GitHub Actions runner (homelab / Unraid).
 #
+# NOT DEPLOYED. A design from July 2026; the live runners are `docker run`
+# containers that differ from it (docs/SELF_HOSTED_RUNNER.md, "What runs
+# today"). Do not bring this stack up next to them: it would register a second
+# runner under the same name.
+#
 # This replaces the legacy `gh-actions-runner` stack that ran
 # `myoung34/github-runner:latest` with `privileged: true` and in-container
 # Docker-in-Docker. See docs/SELF_HOSTED_RUNNER.md for the full rationale.

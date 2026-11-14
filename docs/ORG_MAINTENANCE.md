@@ -6,7 +6,7 @@ This repo bootstraps three kinds of automatic upkeep into every `navigaite` org 
 2. **`trunk upgrade`** on a weekly schedule, staggered per repo, auto-merging after CI.
 3. ~~Claude Code caller~~ — retired 2026-09: Flaiky's Issue Worker and review stages replaced the `@claude` workflows; the reusable `claude-code.yaml` no longer exists.
 
-It does **not** manage bumps of the reusable pipeline itself — consumers pin `maxbec/pipeline/...@<sha>`, and `provisioning/migrate-repos.ts` in `maxbec/flaiky` repins the whole fleet after a release.
+It does **not** manage bumps of the reusable pipeline itself — consumers pin `maxbec/pipeline/...@<sha>`, and `train/bin/migrate-repos.ts` here repins the whole fleet after a release.
 
 ## Architecture
 

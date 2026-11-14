@@ -253,3 +253,46 @@ test("the Docker layer cache stays on a self-hosted runner unless the config nam
   assert.notEqual(bad.status, 0, "a backend the Deploy action does not know fails Guard")
   assert.match(bad.stdout, /cache_backend must be gha, local or none/)
 })
+
+test("a release: block is validated, not refused", () => {
+  const r = parse(
+    `version: '3'\nrelease:\n  version_files: [package.json, apps/web/package.json]\n  changelog_show_hidden: false\n  release_as: 2.0.0\n`,
+  )
+  assert.equal(r.status, 0, r.stdout + r.stderr)
+  assert.equal(parse(`version: '3'\nrelease: {}\n`).status, 0, "an empty block is fine")
+  assert.equal(
+    parse(`version: '3'\nrelease:\n  version_files: []\n`).status,
+    0,
+    "an empty list releases with the tag and the changelog only",
+  )
+  assert.equal(parse(`version: '3'\nrelease:\n  release_as: '10.20.30'\n`).status, 0, "a quoted version is a string too")
+})
+
+test("an unknown or mistyped release key fails Guard and names the key", () => {
+  const bad = [
+    [`release:\n  versionFiles: [package.json]\n`, /release\.versionFiles/],
+    [`release:\n  version_files: package.json\n`, /release\.version_files/],
+    [`release:\n  version_files: [package.json, 3]\n`, /release\.version_files/],
+    [`release:\n  version_files: ['']\n`, /release\.version_files/],
+    [`release:\n  changelog_show_hidden: 'yes'\n`, /release\.changelog_show_hidden/],
+    [`release:\n  release_as: 2.0\n`, /release\.release_as/],
+    [`release:\n  release_as: v2.0.0\n`, /release\.release_as/],
+    [`release:\n  release_as: 2.0.0-beta.1\n`, /release\.release_as/],
+    [`release: package.json\n`, /release must be a mapping/],
+  ]
+  for (const [block, message] of bad) {
+    const r = parse(`version: '3'\n${block}`)
+    assert.equal(r.status, 1, block)
+    assert.match(r.stdout + r.stderr, /::error::/, block)
+    assert.match(r.stdout + r.stderr, message, block)
+  }
+})
+
+test("the v2 blocks deployment: and pipeline: are still refused", () => {
+  for (const key of ["deployment", "pipeline"]) {
+    const r = parse(`version: '3'\n${key}:\n  provider: vercel\n`)
+    assert.equal(r.status, 1, key)
+    assert.match(r.stdout + r.stderr, new RegExp(`::error::.*${key}`), key)
+    assert.doesNotMatch(r.stdout + r.stderr, /belong to/, "the message says what to do, not who owns releases")
+  }
+})

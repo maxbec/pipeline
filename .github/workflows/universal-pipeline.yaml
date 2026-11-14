@@ -161,13 +161,49 @@ jobs:
           fi
           VERSION=$(str '.version' '')
           if [[ "$VERSION" != "3" && "$VERSION" != "3.0" ]]; then
-            echo "::error::$CONFIG_FILE is version '${VERSION:-unset}'; this pipeline reads version 3 (deploy: instead of deployment:, no release: block). Run provisioning/migrate-repos.ts."
+            echo "::error::$CONFIG_FILE is version '${VERSION:-unset}'; this pipeline reads version 3 (deploy: instead of deployment:). Run provisioning/migrate-repos.ts."
             exit 1
           fi
-          if [[ "$(yq -r 'has("deployment") or has("release") or has("pipeline")' "$CONFIG_FILE")" == "true" ]]; then
-            echo "::error::$CONFIG_FILE still has a v2 block (deployment/release/pipeline). Versioning and releases belong to Flaiky; deploys are configured under deploy:."
-            exit 1
-          fi
+          for KEY in deployment pipeline; do
+            if [[ "$(KEY="$KEY" yq -r 'has(strenv(KEY))' "$CONFIG_FILE")" == "true" ]]; then
+              echo "::error::$CONFIG_FILE still has the v2 block $KEY:. Deploys are configured under deploy:; pipeline: is no longer read."
+              exit 1
+            fi
+          done
+
+          # --- release (read by the Train workflow, only validated here) ------
+          # A typo in this block would otherwise surface as a release with the
+          # wrong version files, long after the pull request that made it.
+          bad() { echo "::error::$CONFIG_FILE: $1"; exit 1; }
+          case "$(yq -r '.release | tag' "$CONFIG_FILE")" in
+            '!!null') ;;
+            '!!map')
+              while IFS= read -r KEY; do
+                case "$KEY" in
+                  version_files)
+                    # An empty list is a choice, not a mistake: the repository
+                    # carries no version file and releases with the tag and
+                    # the CHANGELOG only. The train reads it the same way.
+                    [[ "$(yq -r '.release.version_files | tag' "$CONFIG_FILE")" == '!!seq' ]] \
+                      || bad "release.version_files must be a list of paths."
+                    [[ "$(yq -r '.release.version_files | all_c(tag == "!!str" and . != "")' "$CONFIG_FILE")" == "true" ]] \
+                      || bad "release.version_files must be a list of paths; every entry a non-empty string."
+                    ;;
+                  changelog_show_hidden)
+                    [[ "$(yq -r '.release.changelog_show_hidden | tag' "$CONFIG_FILE")" == '!!bool' ]] \
+                      || bad "release.changelog_show_hidden must be true or false."
+                    ;;
+                  release_as)
+                    [[ "$(yq -r '.release.release_as | tag' "$CONFIG_FILE")" == '!!str' \
+                      && "$(yq -r '.release.release_as' "$CONFIG_FILE")" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+                      || bad "release.release_as must be a version X.Y.Z (quote it: '2.0' alone is a number)."
+                    ;;
+                  *) bad "release.$KEY is not a known key. Known: version_files, changelog_show_hidden, release_as." ;;
+                esac
+              done < <(yq -r '.release | keys | .[]' "$CONFIG_FILE")
+              ;;
+            *) bad "release must be a mapping with version_files, changelog_show_hidden and release_as." ;;
+          esac
 
           # --- stack and toolchain -------------------------------------------
           STACK=$(str '.stack' 'auto')

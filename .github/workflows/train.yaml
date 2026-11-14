@@ -1,0 +1,487 @@
+---
+# The release train. A second reusable workflow beside the universal pipeline:
+# the pipeline answers "does this check out, does a release deploy", the train
+# acts on the answer. The Train job runs two entry points from train/bin:
+#
+#   release.ts  keeps one Release PR per branch, and tags and publishes a
+#               merged one
+#   merge.ts    merges every open pull request the merge rules allow
+#
+# Both look at the whole repository (every open pull request, both branches);
+# the event that started the run is only a poke.
+#
+# Three more jobs are the Fix, for a Pipeline run whose Check failed on a pull
+# request (fix.ts): the failed jobs are rerun once; if the check is still red,
+# Claude Code proposes a patch and a guard decides whether it is committed.
+# Content the pull request controls and a token that can write never share a
+# job: Fix (propose) holds the tree and the Claude token, Fix (commit) holds
+# the App token and never checks the branch out.
+#
+# Everything that writes goes through a GitHub App installation token: a merge
+# or a release made with GITHUB_TOKEN starts no workflow, so Deploy would never
+# fire. The job's own token is read-only.
+#
+# The caller (examples/train-caller.yaml) starts this on a finished Pipeline
+# run, on a manual dispatch and on a schedule — never on a pull_request event.
+# Those three run the default branch's copy of the caller, so a pull request
+# cannot change the train that judges it.
+#
+# The secrets are optional: without the App secrets every step is skipped and
+# the job ends green, so the caller can be rolled out before they exist.
+name: Train
+
+on:
+  workflow_call:
+    secrets:
+      TRAIN_APP_ID:
+        description: App ID of the GitHub App the train acts as
+        required: false
+      TRAIN_APP_PRIVATE_KEY:
+        description: Private key of that App
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: A `claude setup-token` token for the Fix; without it a red check is rerun and nothing more
+        required: false
+
+permissions: {}
+
+jobs:
+  train:
+    name: Train
+    # `github` is the caller's context here. A finished Pipeline run counts
+    # only when it is green and came from a pull request or a push: a release
+    # run is a deploy, and a red or cancelled run has nothing to merge.
+    # A red pull request run is the Fix jobs' below.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push'))
+    # A public repository always runs GitHub-hosted: its runs can be started by
+    # anyone's pull request. A private one uses the caller's PIPELINE_RUNNER
+    # variable (a JSON array of labels) when set. An event without
+    # `repository.private` falls back to hosted, the safe side.
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    # One train per repository, and a queued one waits: two runs must never
+    # merge or tag at the same time.
+    concurrency:
+      group: train-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      # Secrets cannot be read in an `if:`, so a step turns them into an output.
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
+          fi
+
+      # Neither `owner` nor `repositories`: the token reaches this repository only.
+      - name: Mint the App token
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+
+      # The history code reads every branch and tag, and runs `git fetch origin`
+      # in this clone itself — so the credentials stay in the clone. No code
+      # from a pull request runs in this job, only train/ at the pinned commit.
+      - name: Checkout the repository, whole
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      # The train's code, at exactly the commit this workflow was pinned to:
+      # inside a called workflow `job.workflow_sha` is the reusable workflow's
+      # own commit. `github.workflow_sha` is the caller's, and fetching this
+      # repository at a caller's SHA dies with "not our ref".
+      - name: Checkout the train
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      # The entries are TypeScript run as-is; type stripping needs Node 24.12
+      # or later. check-latest keeps a self-hosted runner's cached 24.x from
+      # being older than that.
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      - name: Read the release configuration
+        id: config
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          CONFIG_FILE: .github/pipeline.yaml
+        run: |
+          set -euo pipefail
+          RELEASE='{}'
+          if [[ -f "$CONFIG_FILE" ]]; then
+            RELEASE=$(yq -o=json -I=0 '.release // {}' "$CONFIG_FILE")
+          fi
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        id: release
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          TRAIN_CLONE: ${{ github.workspace }}
+          TRAIN_RELEASE_CONFIG: ${{ steps.config.outputs.release }}
+          TRAIN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: node .pipeline/train/bin/release.ts
+
+      # A failed Release must not keep green pull requests waiting, so Merge
+      # runs whenever Release was reached. Either failure fails the job.
+      - name: Merge
+        id: merge
+        if: always() && steps.release.outcome != 'skipped' && steps.release.outcome != 'cancelled'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node .pipeline/train/bin/merge.ts
+
+  # ---- Fix ------------------------------------------------------------------
+  # Decides what a failed run needs. Reads the pull request, the run and the
+  # failed job's log through the API; nothing is checked out but the train.
+  fix-triage:
+    name: Fix (triage)
+    # Exactly `failure`: a cancelled run was superseded, not broken.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      action: ${{ steps.triage.outputs.action }}
+      pr: ${{ steps.triage.outputs.pr }}
+      head_sha: ${{ steps.triage.outputs.head_sha }}
+      attempt: ${{ steps.triage.outputs.attempt }}
+    steps:
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
+          fi
+
+      # Rerunning needs actions: write; the give-up comment and its label need
+      # the other two. No contents permission: this job reads no file.
+      - name: Mint the App token
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+          permission-actions: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout the train
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      # CLAUDE_AVAILABLE is the comparison's result, 'true' or 'false': the
+      # token itself never enters this job. Without it a still-red check ends
+      # here with a notice, green.
+      - name: Triage
+        id: triage
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          CLAUDE_AVAILABLE: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          FIX_INPUT_DIR: ${{ runner.temp }}/fix-input
+        run: node .pipeline/train/bin/fix.ts triage
+
+      - name: Upload the proposal's input
+        if: steps.triage.outputs.action == 'propose'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fix-input
+          path: ${{ runner.temp }}/fix-input
+          if-no-files-found: error
+          retention-days: 1
+
+  # Claude Code against the pull request's tree. Everything here is controlled
+  # by the pull request — its files, and the log in the prompt — so this job
+  # has no token that can write: the job's own is contents: read, the App
+  # token is not minted, and the Claude token is in one step's environment.
+  # Nothing from the tree is executed: no install, no test, no package script.
+  # Always a fresh hosted VM, never a runner that outlives the job.
+  fix-propose:
+    name: Fix (propose)
+    needs: fix-triage
+    if: needs.fix-triage.outputs.action == 'propose'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # Node and the CLI go in before the tree exists, from the runner's temp
+      # directory: no .npmrc of the pull request can redirect the install.
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      - name: Install Claude Code, pinned
+        id: install
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          CLAUDE_CODE_VERSION: 2.1.325
+        run: |
+          set -euo pipefail
+          npm install --global --registry=https://registry.npmjs.org/ "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: Download the proposal's input
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fix-input
+          path: ${{ runner.temp }}/fix-input
+
+      - name: Checkout the pull request's head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.fix-triage.outputs.head_sha }}
+          persist-credentials: false
+
+      # The same file twice: as the user settings (the one source the run
+      # loads) and through --settings. `//` is an absolute path, `~/` the home
+      # directory. The two block keys keep the file tools inside the checkout
+      # in every permission mode; the deny rules name what must stay unread
+      # even so — the process environment under /proc holds the Claude token.
+      # /home cannot be denied as a whole: the checkout lives in it.
+      - name: Write Claude Code's settings
+        id: claude-settings
+        shell: bash
+        run: |
+          set -euo pipefail
+          SETTINGS="$RUNNER_TEMP/claude-settings.json"
+          jq -n --arg ws "/$GITHUB_WORKSPACE" --arg tmp "/$RUNNER_TEMP" '{
+            disableAllHooks: true,
+            permissions: {
+              defaultMode: "dontAsk",
+              blockReadsOutsideWorkingDirectories: true,
+              blockWritesOutsideWorkingDirectories: true,
+              allow: ["Edit(\($ws)/**)"],
+              deny: [
+                "Bash", "PowerShell", "Monitor", "WebFetch", "WebSearch", "Write", "NotebookEdit", "Agent", "Skill", "mcp__*",
+                "Read(//proc/**)", "Read(//sys/**)", "Read(//dev/**)", "Read(//etc/**)", "Read(//root/**)",
+                "Read(//tmp/**)", "Read(//var/**)", "Read(//opt/**)", "Read(//mnt/**)",
+                "Read(\($tmp)/**)",
+                "Read(~/.claude/**)", "Read(~/.claude.json)", "Read(~/.config/**)", "Read(~/.ssh/**)",
+                "Read(~/.npmrc)", "Read(~/.gitconfig)", "Read(~/.docker/**)", "Read(~/.aws/**)", "Read(~/.azure/**)",
+                "Read(\($ws)/.git/**)", "Edit(\($ws)/.git/**)", "Edit(\($ws)/.github/**)", "Edit(\($ws)/.claude/**)"
+              ]
+            }
+          }' > "$SETTINGS"
+          mkdir -p "$HOME/.claude"
+          cp "$SETTINGS" "$HOME/.claude/settings.json"
+
+      # No --bare: bare mode does not read CLAUDE_CODE_OAUTH_TOKEN. Instead
+      # --safe-mode drops the tree's CLAUDE.md, skills, commands, agents, hooks
+      # and MCP servers, and --setting-sources user keeps its .claude/settings
+      # and .mcp.json unread. Four tools, no shell, no network, no MCP;
+      # dontAsk denies whatever would prompt. ANTHROPIC_API_KEY is set empty on
+      # purpose: a key would be used instead of the subscription token.
+      # The step never fails: no result, or an error in it, becomes the
+      # diagnosis, and Fix (commit) reports it.
+      - name: Run Claude Code
+        id: claude
+        continue-on-error: true
+        shell: bash
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ''
+          ANTHROPIC_AUTH_TOKEN: ''
+          DISABLE_AUTOUPDATER: '1'
+          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+        run: |
+          set +e -uo pipefail
+          timeout 15m claude -p "Follow the instructions given on standard input." \
+            --safe-mode \
+            --setting-sources user \
+            --settings "$RUNNER_TEMP/claude-settings.json" \
+            --tools "Read,Edit,Glob,Grep" \
+            --allowedTools "Edit(/**)" \
+            --disallowedTools "mcp__*" \
+            --permission-mode dontAsk \
+            --max-turns 30 \
+            --no-session-persistence \
+            --output-format json \
+            < "$RUNNER_TEMP/fix-input/prompt.txt" > "$RUNNER_TEMP/claude-output.json"
+          echo "claude exited with $?"
+
+      # The train's code arrives only now, into a path emptied first: neither
+      # the pull request nor Claude Code can have put a file where the next
+      # step runs one.
+      - name: Clear the train's path
+        if: always()
+        shell: bash
+        run: rm -rf -- .pipeline
+
+      - name: Checkout the train
+        if: always()
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      # No token and no network: reads the tree, writes two files.
+      - name: Collect the proposal
+        id: collect
+        if: always()
+        shell: bash
+        env:
+          BASE_SHA: ${{ needs.fix-triage.outputs.head_sha }}
+          FIX_OUTPUT_DIR: ${{ runner.temp }}/fix-output
+        run: node .pipeline/train/bin/fix.ts collect "$RUNNER_TEMP/claude-output.json"
+
+      - name: Upload the proposal
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fix-output
+          path: ${{ runner.temp }}/fix-output
+          if-no-files-found: warn
+          retention-days: 1
+
+  # The only Fix job that can write, and the only thing it reads from the
+  # propose job is two files it treats as a proposal. It never checks the
+  # repository out: file contents come through the API, the commit goes
+  # through createCommitOnBranch, signed by GitHub and refused if the head
+  # moved. It runs even when Fix (propose) failed, to say so on the pull request.
+  fix-commit:
+    name: Fix (commit)
+    needs: [fix-triage, fix-propose]
+    if: always() && needs.fix-triage.outputs.action == 'propose'
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
+          fi
+
+      # Three permissions and no more: the commit, the comment, the label.
+      - name: Mint the App token
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
+      - name: Checkout the train
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      # Missing when Fix (propose) failed before its upload; the entry then
+      # reports that no proposal was made.
+      - name: Download the proposal
+        if: steps.ready.outputs.ready == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fix-output
+          path: ${{ runner.temp }}/fix-output
+
+      - name: Commit
+        id: commit
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ needs.fix-triage.outputs.pr }}
+          HEAD_SHA: ${{ needs.fix-triage.outputs.head_sha }}
+          ATTEMPT: ${{ needs.fix-triage.outputs.attempt }}
+          FIX_OUTPUT_DIR: ${{ runner.temp }}/fix-output
+        run: node .pipeline/train/bin/fix.ts commit

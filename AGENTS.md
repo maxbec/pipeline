@@ -12,12 +12,17 @@ Versioning, release PRs, tags, changelogs and promotion are Flaiky's
 
 ```
 .github/workflows/universal-pipeline.yaml   the three jobs; all logic is inline `run:` blocks
-.github/workflows/examples/caller.yaml      the caller every repository carries (rendered by Flaiky)
+.github/workflows/examples/caller.yaml      the caller every repository carries (rendered by train/bin/migrate-repos.ts)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
+.github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge) and the three Fix jobs, all running train/bin
+.github/workflows/examples/train-caller.yaml   its caller (workflow_run, dispatch, schedule; never pull_request)
+.github/workflows/train-self.yaml           this repo's Train caller: uses ./.github/workflows/train.yaml
+.github/workflows/train-sweep.yaml          central sweep over the owner's other repositories; runs scripts/train-sweep.sh
 .github/pipeline.yaml                       this repo's own config (tests only)
 .github/actions/deploy-{vercel,cloudflare,docker,render}   provider actions used by Deploy
 .github/workflows/{trunk-upgrade,nightly-maintenance,hmac-cron-post}.yaml   other reusable workflows consumers call
 test/                                       node:test; pulls `run:` blocks out of the YAML by step id and executes them
+train/                                      the release-train library and its tests (TypeScript, no build); see train/README.md
 docs/CONFIGURATION.md                       the v3 config reference
 scripts/                                    repo bootstrap and org maintenance helpers
 ```
@@ -49,7 +54,8 @@ scripts/                                    repo bootstrap and org maintenance h
    extract them by id; keep the ids.
 3. **Booleans in the config are read raw** (`bool()` in the config step): jq's
    `//` would turn an explicit `false` into the default.
-4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`.** The caller's job id
+4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`,** in the universal
+   pipeline; the train is a workflow of its own. The caller's job id
    is `pipeline`. Renaming any of these changes the required check context in
    every branch protection and ruleset.
 5. **The pipeline never talks to Infisical.** Credentials arrive as GitHub
@@ -58,11 +64,19 @@ scripts/                                    repo bootstrap and org maintenance h
 6. **No release-please, no Flama, no promotion workflows here.** If a change
    needs a version, Flaiky's release train handles it after merge.
 7. Exactly three environments: `development`, `preview`, `production`.
+8. **The sweep's log is public, the repositories it visits are not.**
+   `scripts/train-sweep.sh` prints indexes, counts and exit codes only.
+9. **The train never runs on a `pull_request` event** and never with the job's
+   own token: writes go through the App token, or they start no workflow.
+10. **Content a pull request controls never shares a job with a token that can
+    write.** Fix (propose) has the tree, the log and the Claude token and
+    executes nothing; Fix (commit) has the App token and checks nothing out.
 
 ## 5. Testing
 
 ```sh
-npm test        # node --test "test/**/*.test.mjs" — needs yq and bash on PATH
+npm test        # node --test over test/**/*.test.mjs and train/test/**/*.test.ts — needs yq, bash and git on PATH
+npm run typecheck   # tsc --noEmit over train/
 actionlint      # https://github.com/rhysd/actionlint
 ```
 
@@ -80,6 +94,6 @@ is checked by the workflow it changes (`ci.yaml`).
   the config step, the row in `docs/CONFIGURATION.md`, and the provider to the
   shape test.
 - **Bump a pinned action**: change the SHA and the version comment together.
-- **Roll out a pipeline change**: merge to `dev`, let Flaiky release it, then
-  repin every caller with `provisioning/migrate-repos.ts` in `maxbec/flaiky`.
+- **Roll out a pipeline change**: merge to `dev`, let it be released, then
+  repin every caller with `train/bin/migrate-repos.ts` (train/README.md, "Fleet tool").
   A merged fix is live nowhere until callers repin.
