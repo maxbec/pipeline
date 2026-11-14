@@ -1,0 +1,125 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "number": 74,
+        "state": "MERGED",
+        "isDraft": false,
+        "merged": true,
+        "mergedAt": "2026-09-01T19:51:37Z",
+        "mergeable": "UNKNOWN",
+        "mergeStateStatus": "UNKNOWN",
+        "reviewDecision": null,
+        "baseRefName": "dev",
+        "headRefName": "ci/drift-guard",
+        "headRefOid": "1b2c3d4e5f60718293a4b5c6d7e8f9012345670a",
+        "autoMergeRequest": {
+          "enabledBy": {
+            "login": "octo-delivery-bot"
+          },
+          "mergeMethod": "SQUASH"
+        },
+        "baseRef": {
+          "refUpdateRule": null,
+          "branchProtectionRule": null
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "oid": "1b2c3d4e5f60718293a4b5c6d7e8f9012345670a",
+                "signature": {
+                  "isValid": true,
+                  "state": "VALID",
+                  "signer": {
+                    "login": "octocat"
+                  }
+                },
+                "statusCheckRollup": {
+                  "state": "SUCCESS",
+                  "contexts": {
+                    "nodes": [
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Branch Guard",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "auto-merge / Auto Merge",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "branch-guard / Branch Guard",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "policy / Policy Gate",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "🧹 Lint",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "🧪 Test",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "🤖 Auto-merge",
+                        "status": "COMPLETED",
+                        "conclusion": "SKIPPED",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "🏗️ Build",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": false
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "pipeline / Check",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": true
+                      },
+                      {
+                        "__typename": "CheckRun",
+                        "name": "Preflight",
+                        "status": "COMPLETED",
+                        "conclusion": "SUCCESS",
+                        "isRequired": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "reviewThreads": {
+          "nodes": []
+        }
+      }
+    }
+  }
+}

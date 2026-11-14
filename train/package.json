@@ -1,0 +1,5 @@
+{
+  "name": "pipeline-train",
+  "private": true,
+  "type": "module"
+}
