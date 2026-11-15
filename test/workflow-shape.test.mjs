@@ -313,7 +313,7 @@ test("a public repository's train is always GitHub-hosted", () => {
   // including an event that carries no repository.private: hosted.
   assert.equal(
     yaml(TRAIN).jobs.train["runs-on"],
-    "${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '[\"ubuntu-latest\"]') }}",
+    "${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '[\"ubuntu-slim\"]') }}",
   )
 })
 
@@ -478,7 +478,7 @@ test("the Train callers listen for a finished Pipeline, a dispatch and a schedul
     // A pull_request* trigger would run the pull request's copy of the file with the secrets.
     for (const trigger of Object.keys(doc.on)) assert.doesNotMatch(trigger, /^pull_request/, file)
     assert.deepEqual(doc.on.workflow_run, { workflows: ["Pipeline"], types: ["completed"] }, file)
-    assert.deepEqual(doc.on.schedule, [{ cron: "*/30 * * * *" }], file)
+    assert.deepEqual(doc.on.schedule, [{ cron: "17 */6 * * *" }], file)
     assert.deepEqual(Object.keys(doc.jobs), ["train"], file)
     const job = doc.jobs.train
     assert.equal(job.if, "vars.TRAIN != 'off'", `${file}: the kill switch sits on the job, so no runner starts`)
@@ -540,7 +540,7 @@ test("the Fix starts only on a pull request's Pipeline run that concluded failur
   const cond = String(fixJob("fix-triage").if).replace(/\s+/g, " ")
   assert.equal(
     cond,
-    "github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request'",
+    "github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request' && !startsWith(github.event.workflow_run.head_branch, 'release/') && !startsWith(github.event.workflow_run.head_branch, 'promote/') && !startsWith(github.event.workflow_run.head_branch, 'backmerge/') && !startsWith(github.event.workflow_run.head_branch, 'hotfix/')",
   )
   // The other two hang on triage's verdict, which only that condition produces.
   const propose = fixJob("fix-propose")

@@ -167,7 +167,11 @@ fix.ts collect   src/fix/collect.ts            what Claude Code changed in the t
 fix.ts commit    src/fix/commit.ts, guard.ts   the guard, then one signed commit or a comment
 ```
 
-`triage.ts` decides from the run and the pull request as GitHub reports them;
+`triage.ts` decides from the run and the pull request as GitHub reports them.
+A run's first failure is rerun once, unless the Check job's failed step is
+`Lint`, `Lint (trunk)`, `Test` or `Build`: the same commit fails those the same
+way, so they go to the proposal at once (edilio, 2026-11-15: six reruns, none
+recovered);
 `prompt.ts` builds the prompt around the failed job's log, fenced as untrusted
 data; `guard.ts` is the allowlist a proposed change has to pass. `collect`
 runs next to a tree the pull request controls and executes nothing from it;
@@ -204,7 +208,8 @@ Per repository, in one signed commit (`createCommitOnBranch`) on the branch
 - `.github/workflows/ci.yaml` from `examples/caller.yaml` and
   `.github/workflows/train.yaml` from `examples/train-caller.yaml`, both at the
   same pin: the sha on the `uses:` line, the tag in a comment above it, no
-  line over 120 characters.
+  line over 120 characters. The nightly `schedule` of `ci.yaml` (the full
+  Check) is rendered only where `.github/pipeline.yaml` sets `test.pr_command`.
 - `.github/pipeline.yaml` in version 3, the files of earlier release tooling
   deleted, and the pipeline section of `AGENTS.md` / `CLAUDE.md` rewritten
   where the file has one.
