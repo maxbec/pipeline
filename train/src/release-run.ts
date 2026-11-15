@@ -22,7 +22,7 @@ import { createRelease, createTag, getReleaseByTag } from "./github/releases.ts"
 import { addLabel } from "./merge-run.ts"
 import { openBackmerge } from "./release/backmerge.ts"
 import { releaseBody, sectionOf } from "./release/changelog.ts"
-import { fetchOrigin, readTreeFile } from "./release/history.ts"
+import { fetchOrigin, readTreeFile, resolveRef } from "./release/history.ts"
 import {
   findLatestMergedRelease,
   findPendingRelease,
@@ -367,6 +367,17 @@ export async function runRelease(input: ReleaseRunInput): Promise<ReleaseRunResu
     }
     // dev first: the release it cuts is what main's promotion is built from.
     for (branch of kind === "major" ? ["dev", "main"] : ["main"]) {
+      // A major repository that has never been promoted has no `main` yet.
+      // That is nothing to release, not an error: the first promotion is
+      // built from `dev`'s first beta and creates the branch's history.
+      if (kind === "major" && branch === "main" && !(await resolveRef(clone, "origin/main"))) {
+        rows.push({
+          branch,
+          result: "nothing",
+          reason: "the repository has no main branch yet: nothing has been promoted",
+        })
+        continue
+      }
       const done = await releaseBranch(input, repository, config, branch)
       rows.push(done.row)
       failed ||= done.failed
