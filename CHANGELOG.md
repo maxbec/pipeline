@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.6.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.5.3...v5.6.0-beta.1) (2026-11-15)
+
+
+### ✨ Features
+
+* **pipeline:** fast and full Check depth via test.pr_command ([#164](https://github.com/maxbec/pipeline/issues/164)) ([be2d153](https://github.com/maxbec/pipeline/commit/be2d153bd273c438823be3d7119e5678523e9976))
+
+
+### ⚡ Performance
+
+* **train:** run the train on ubuntu-slim and rerun only what a rerun can cure ([#163](https://github.com/maxbec/pipeline/issues/163)) ([1348a80](https://github.com/maxbec/pipeline/commit/1348a80764482d04615d0452c8ccaa88294b6913))
+* **pipeline:** keep caches warm on hosted runners and skip no-op Train runs ([#161](https://github.com/maxbec/pipeline/issues/161)) ([834c1b4](https://github.com/maxbec/pipeline/commit/834c1b476d99ccb019acbc19d3ffd24082ed161d))
+
 ## [5.5.3](https://github.com/maxbec/pipeline/compare/v5.5.2...v5.5.3) (2026-11-15)
 
 
