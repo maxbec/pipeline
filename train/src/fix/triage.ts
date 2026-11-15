@@ -5,6 +5,11 @@
  * The rules are checked in order and the first that does not hold ends it.
  * Everything is read from GitHub at decision time; the event that started the
  * job only names the run.
+ *
+ * A rerun is for what a rerun can cure: a lost runner, a registry that did not
+ * answer, a cache that would not restore. A failed Lint, Test or Build is the
+ * tree's own failure and comes back the same on the same commit, so it goes to
+ * the proposal at once.
  */
 import type { GitHubClient } from "../github/client.ts"
 import type { RepoRef } from "../github/pr.ts"
@@ -36,8 +41,17 @@ export const NEEDS_HUMAN = "needs-human"
 export const HOLD = "hold"
 export const GAVE_UP_MARKER = "<!-- train-fix gave-up -->"
 
-/** Heads the train builds or a person owns; none of them is patched. */
-const NEVER = ["release/", "promote/", "backmerge/", "hotfix/"]
+/**
+ * Heads the train builds or a person owns; none of them is patched. The
+ * condition of the Fix (triage) job in train.yaml names the same prefixes, so
+ * that no runner starts for them.
+ */
+export const NEVER_PATCHED = ["release/", "promote/", "backmerge/", "hotfix/"]
+/**
+ * The steps of the Check job that fail because of what the tree contains. The
+ * names are the step names in universal-pipeline.yaml.
+ */
+export const OWN_FAILURE_STEPS = ["Lint", "Lint (trunk)", "Test", "Build"]
 const DEPENDABOT = "dependabot[bot]"
 
 export function attemptMarker(attempt: number): string {
@@ -68,7 +82,7 @@ export async function triageFailure(client: GitHubClient, repo: RepoRef, ref: Ru
   }
   const branch = run.head_branch ?? ""
   if (!branch) return none("the run names no head branch")
-  if (NEVER.some((prefix) => branch.startsWith(prefix))) return none(`${branch} is never patched`)
+  if (NEVER_PATCHED.some((prefix) => branch.startsWith(prefix))) return none(`${branch} is never patched`)
 
   const pulls = await openPullsForBranch(client, repo, branch)
   const [pull, ...more] = pulls
@@ -88,7 +102,11 @@ export async function triageFailure(client: GitHubClient, repo: RepoRef, ref: Ru
   const check = jobs.find((j) => j.name === CHECK_JOB && j.conclusion === "failure")
   if (!check) return none(`the failed job is not ${CHECK_JOB}`)
 
-  if ((run.run_attempt ?? 1) <= 1) return { action: "rerun" }
+  // The step that failed first; whatever failed after it failed in its wake.
+  // A job without one — the runner went away — is rerun like any other step.
+  const failedStep = check.steps?.find((s) => s.conclusion === "failure")?.name
+  const ownFailure = failedStep !== undefined && OWN_FAILURE_STEPS.includes(failedStep)
+  if ((run.run_attempt ?? 1) <= 1 && !ownFailure) return { action: "rerun" }
 
   const comments = await listComments(client, repo, pull.number)
   const attempts = comments.filter((c) => isBotComment(c, MARKER)).length

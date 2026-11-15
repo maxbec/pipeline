@@ -63,7 +63,10 @@ test("the rendered Train caller stays within 120 characters and pins like the Pi
 test("the Train caller's schedule sits between two markers and can be cut out", () => {
   const text = readFileSync(trainTemplateFile, "utf8")
   const doc = yaml(trainTemplateFile)
-  assert.deepEqual(doc.on.schedule, [{ cron: "*/30 * * * *" }])
+  // The safety net for what no event reports. Every 30 minutes was 48 billed
+  // runs a day in each repository, for a net that a finished Pipeline run and
+  // a manual dispatch already hold.
+  assert.deepEqual(doc.on.schedule, [{ cron: "17 */6 * * *" }])
   const lines = text.split("\n")
   const begin = lines.findIndex((l) => l.trim() === "# __TRAIN_SCHEDULE_BEGIN__")
   const end = lines.findIndex((l) => l.trim() === "# __TRAIN_SCHEDULE_END__")
@@ -105,4 +108,57 @@ test("the train caller template has no empty mapping value", () => {
   const text = readFileSync(new URL("../.github/workflows/examples/train-caller.yaml", import.meta.url), "utf8")
   const bare = text.split("\n").filter((line) => /^\s*[\w-]+:\s*$/.test(line) && /^\s*workflow_dispatch:/.test(line))
   assert.deepEqual(bare, [])
+})
+
+// ---- the full Check: on demand everywhere, nightly where there is a fast one --
+
+const callerFile = join(ROOT, ".github/workflows/examples/caller.yaml")
+const CONCURRENCY = {
+  group: "pipeline-${{ github.event_name }}-${{ github.ref }}",
+  "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+}
+
+test("both Pipeline callers can be dispatched and grant actions: write", () => {
+  // `gh workflow run ci.yaml --ref dev` is how a full Check is asked for, and a
+  // green full run re-runs the Check of the Release PR that waited for it.
+  for (const file of ["examples/caller.yaml", "ci.yaml"]) {
+    const doc = yaml(join(ROOT, ".github/workflows", file))
+    assert.deepEqual(doc.on.workflow_dispatch, {}, `${file}: an explicit empty mapping, for yamllint's empty-values`)
+    assert.equal(doc.jobs.pipeline.permissions.actions, "write", file)
+    assert.deepEqual(doc.concurrency, CONCURRENCY, `${file}: the concurrency group stays as it was`)
+    assert.deepEqual(doc.on.push, { branches: ["dev", "main"] }, file)
+    assert.deepEqual(doc.on.release, { types: ["published"] }, file)
+  }
+})
+
+test("the Pipeline caller's nightly sits between two markers and can be cut out", () => {
+  const text = readFileSync(callerFile, "utf8")
+  const doc = yaml(callerFile)
+  assert.deepEqual(doc.on.schedule, [{ cron: "23 2 * * *" }])
+  const lines = text.split("\n")
+  const begin = lines.findIndex((l) => l.trim() === "# __NIGHTLY_BEGIN__")
+  const end = lines.findIndex((l) => l.trim() === "# __NIGHTLY_END__")
+  assert.ok(begin > 0 && end > begin, "both markers, each on a line of its own, in order")
+  assert.equal(text.match(/__NIGHTLY_/g).length, 2, "the markers appear nowhere else")
+  // What the renderer does for a repository without test.pr_command.
+  const dir = scratch()
+  const cut = join(dir, "ci.yaml")
+  writeFileSync(cut, [...lines.slice(0, begin), ...lines.slice(end + 1)].join("\n"))
+  const without = yaml(cut)
+  assert.deepEqual(Object.keys(without.on), ["pull_request", "push", "release", "workflow_dispatch"])
+  assert.deepEqual(without.jobs, doc.jobs, "nothing but the schedule goes")
+  assert.deepEqual(without.concurrency, doc.concurrency)
+})
+
+test("this repository's own caller has the nightly exactly when its pipeline.yaml sets test.pr_command", () => {
+  const fast = String(yaml(join(ROOT, ".github/pipeline.yaml")).test?.pr_command ?? "").trim() !== ""
+  const ci = yaml(join(ROOT, ".github/workflows/ci.yaml"))
+  if (fast) assert.deepEqual(ci.on.schedule, [{ cron: "23 2 * * *" }])
+  else assert.equal(ci.on.schedule, undefined, "no fast Check here, so every run is the full one already")
+})
+
+test("this repository's own Train caller sweeps four times a day; the central sweep keeps its half hour", () => {
+  assert.deepEqual(yaml(join(ROOT, ".github/workflows/train-self.yaml")).on.schedule, [{ cron: "17 */6 * * *" }])
+  // train-sweep.yaml runs in this public repository only, where minutes are free.
+  assert.deepEqual(yaml(join(ROOT, ".github/workflows/train-sweep.yaml")).on.schedule, [{ cron: "*/30 * * * *" }])
 })

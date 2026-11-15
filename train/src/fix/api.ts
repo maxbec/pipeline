@@ -43,6 +43,8 @@ export interface WorkflowJob {
   id: number
   name: string
   conclusion: string | null
+  /** In the order they ran. A job that never reached a runner has none. */
+  steps?: { name: string; conclusion: string | null }[]
 }
 
 /** The jobs of the run's latest attempt. */

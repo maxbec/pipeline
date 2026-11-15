@@ -1017,15 +1017,21 @@ test("the Train caller is rendered at the pin, without the marker lines, within 
 test("the schedule block is kept or dropped as asked; nothing else differs", () => {
   const kept = renderTrainCaller(TRAIN_TEMPLATE, BETA, "keep")
   const dropped = renderTrainCaller(TRAIN_TEMPLATE, BETA, "drop")
-  assert.match(kept, /\n {2}schedule:\n {4}- cron: '\*\/30 \* \* \* \*'\n/)
+  assert.match(kept, /\n {2}schedule:\n {4}- cron: '17 \*\/6 \* \* \*'\n/)
   assert.doesNotMatch(dropped, /schedule:|cron:/)
   const keptLines = kept.split("\n")
   const droppedLines = dropped.split("\n")
   assert.deepEqual(
     keptLines.filter((line) => !droppedLines.includes(line)).map((line) => line.trim()),
-    ["# The sweep, for what no event reports (a resolved thread, a lost event).", "schedule:", "- cron: '*/30 * * * *'"],
+    [
+      "# The sweep, for what no event reports (a resolved thread, a lost event).",
+      "# Four times a day: every Pipeline run that finishes starts the train",
+      "# already, and each scheduled run bills a minute.",
+      "schedule:",
+      "- cron: '17 */6 * * *'",
+    ],
   )
-  assert.equal(keptLines.length - droppedLines.length, 3)
+  assert.equal(keptLines.length - droppedLines.length, 5)
   assert.throws(
     () => renderTrainCaller("name: Train\non:\n  workflow_dispatch:\n", BETA, "drop"),
     /schedule block/,
@@ -1068,6 +1074,84 @@ test("a prerelease pin is a tagged pin: both callers carry its version in the co
   }
   assert.match(train, /\n {2}schedule:\n/, "an organization keeps its own schedule")
   assert.equal(plan.kept.includes(TRAIN_CALLER_PATH), false)
+})
+
+// ---- the Pipeline caller's full Check ----------------------------------------
+
+test("the Pipeline caller can be dispatched and may re-run a waiting Release PR, in every repository", () => {
+  for (const nightly of [false, true]) {
+    const text = renderCaller(CALLER_TEMPLATE, BETA, {}, nightly)
+    assert.doesNotMatch(text, /__PIPELINE_|__NIGHTLY_/, String(nightly))
+    assert.match(text, /\n {2}workflow_dispatch: \{\}\n/, "the full Check on demand")
+    assert.match(text, /\n {6}actions: write\n/, "a green full run re-runs the Release PR's Check")
+    assert.doesNotMatch(text, /actions: read/)
+    assert.match(text, /\n {2}group: pipeline-\$\{\{ github\.event_name \}\}-\$\{\{ github\.ref \}\}\n/)
+    for (const line of text.split("\n")) assert.ok(line.length <= 120, `${line.length}: ${line}`)
+    assert.ok(text.endsWith("\n") && !text.endsWith("\n\n"))
+  }
+})
+
+test("the nightly block is kept or dropped as asked; nothing else differs", () => {
+  const kept = renderCaller(CALLER_TEMPLATE, BETA, {}, true)
+  const dropped = renderCaller(CALLER_TEMPLATE, BETA, {}, false)
+  assert.equal(renderCaller(CALLER_TEMPLATE, BETA, {}), dropped, "no nightly unless asked")
+  assert.match(kept, /\n {2}schedule:\n {4}- cron: '23 2 \* \* \*'\n/)
+  assert.doesNotMatch(dropped, /schedule:|cron:/)
+  const droppedLines = dropped.split("\n")
+  assert.deepEqual(
+    kept
+      .split("\n")
+      .filter((line) => !droppedLines.includes(line))
+      .map((line) => line.trim())
+      .filter((line) => !line.startsWith("#")),
+    ["schedule:", "- cron: '23 2 * * *'"],
+  )
+  // A pin from before the markers has no block to keep: its pipeline knows no depth.
+  assert.doesNotMatch(renderCaller(TEMPLATE, PIN, {}, true), /schedule:/)
+  for (const broken of [
+    CALLER_TEMPLATE.replace("  # __NIGHTLY_END__\n", ""),
+    CALLER_TEMPLATE.replace("  # __NIGHTLY_BEGIN__\n", ""),
+    CALLER_TEMPLATE.replace("  # __NIGHTLY_END__\n", "  # __NIGHTLY_END__\n  # __NIGHTLY_END__\n"),
+  ]) {
+    assert.throws(() => renderCaller(broken, BETA, {}, true), /nightly/, "half a block is not guessed at")
+  }
+  assert.throws(
+    () => renderCaller(CALLER_TEMPLATE.replace("name: Pipeline\n", "name: Pipeline # __NIGHTLY_BEGIN__\n"), BETA, {}),
+    /nightly marker/,
+    "a marker that is not a line of its own would reach the rendered file",
+  )
+})
+
+test("only a repository whose pipeline.yaml sets test.pr_command gets the nightly full Check", () => {
+  const ci = (config: string | null) =>
+    planRepository(
+      repository("widgets", "major", "acme"),
+      facts({ read: (path) => (path === ".github/pipeline.yaml" ? config : null) }),
+      { pin: BETA, template: CALLER_TEMPLATE, overrides: {} },
+    ).additions.find((a) => a.path === ".github/workflows/ci.yaml")?.contents ?? ""
+  const v3 = (test: string) => `---\nversion: "3"\n${test}deploy:\n  provider: none\n`
+
+  const fast = ci(v3("test:\n  command: pnpm test\n  pr_command: pnpm test:changed\n"))
+  assert.match(fast, /\n {2}schedule:\n {4}- cron: '23 2 \* \* \*'\n/)
+  for (const [why, config] of [
+    ["no pr_command", v3("test:\n  command: pnpm test\n")],
+    ["an empty pr_command", v3('test:\n  command: pnpm test\n  pr_command: ""\n')],
+    ["a blank pr_command", v3('test:\n  command: pnpm test\n  pr_command: "  "\n')],
+    ["no test block", v3("")],
+    ["a v2 config, which has no such key", V2_CONFIG],
+    ["no config at all", null],
+  ] as const) {
+    const text = ci(config)
+    assert.doesNotMatch(text, /schedule:|cron:/, why)
+    assert.match(text, /\n {2}workflow_dispatch: \{\}\n/, why)
+  }
+})
+
+test("a v3 config keeps test.pr_command through the fleet tool", () => {
+  const text = '---\nversion: "3"\ntest:\n  command: pnpm test\n  pr_command: pnpm test:changed # fast\ndeploy:\n  provider: none\n'
+  const out = convertConfig(text, {})
+  assert.equal(out.text, text)
+  assert.equal(out.parsed.test?.pr_command, "pnpm test:changed")
 })
 
 test("without a Train plan the Train caller is neither written nor removed", () => {

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { attemptMarker, MAX_ATTEMPTS, triageFailure } from "../../src/fix/triage.ts"
-import { CHECK, FixWorld } from "./fix-world.ts"
+import { readFileSync } from "node:fs"
+import { parse } from "yaml"
+import { attemptMarker, MAX_ATTEMPTS, NEVER_PATCHED, OWN_FAILURE_STEPS, triageFailure } from "../../src/fix/triage.ts"
+import { CHECK, FixWorld, stepsFailingAt } from "./fix-world.ts"
 
 let n = 0
 /** A world with one open pull request whose Check failed on its head, second attempt. */
@@ -89,6 +91,107 @@ test("the first attempt of a run is rerun, and nothing is read from the pull req
   w.runs.get(7)!.run_attempt = 1
   assert.deepEqual(await triage(), { action: "rerun" })
   assert.equal(w.reruns.length, 0, "the decision alone; the caller reruns")
+})
+
+/** A world whose Check failed on the run's first attempt, in `failedStep` (none named when omitted). */
+function firstRed(failedStep?: string) {
+  const w = new FixWorld(`triage-${++n}`)
+  const { pull, headSha } = w.pull("feat/x", { "src/a.ts": "export const a = 1\n" })
+  w.run(7, headSha, "feat/x", failedStep === undefined ? {} : { failedStep })
+  return { w, pull, headSha, triage: () => triageFailure(w.client, w.repo, { id: 7 }) }
+}
+
+test("a first failure in Lint, Test or Build is not rerun: the same commit fails the same way", async () => {
+  // edilio, 2026-11-15: six reruns of a red Check, none recovered. Each was a
+  // test or a lint failure, and each rerun billed a whole Check again.
+  assert.deepEqual(OWN_FAILURE_STEPS, ["Lint", "Lint (trunk)", "Test", "Build"])
+  for (const step of OWN_FAILURE_STEPS) {
+    const { w, pull, headSha, triage } = firstRed(step)
+    assert.deepEqual(
+      await triage(),
+      { action: "propose", pr: pull.number, headSha, attempt: 1, jobId: 72, branch: "feat/x", title: "feat: a change" },
+      step,
+    )
+    assert.equal(w.reruns.length, 0, step)
+  }
+})
+
+test("a first failure anywhere else is rerun: a lost runner, a registry, a cache", async () => {
+  for (const step of ["Set up job", "Checkout", "Secret scan", "Install dependencies", "Restore the build cache"]) {
+    assert.deepEqual(await firstRed(step).triage(), { action: "rerun" }, step)
+  }
+  // A job that failed without a failed step — the runner went away — and one
+  // whose steps the API does not list.
+  const lost = firstRed()
+  lost.w.jobs.set(7, [{ id: 72, name: CHECK, conclusion: "failure", steps: [{ name: "Test", conclusion: "cancelled" }] }])
+  assert.deepEqual(await lost.triage(), { action: "rerun" })
+  assert.deepEqual(await firstRed().triage(), { action: "rerun" })
+})
+
+test("the step that failed first decides, not one that failed in its wake", async () => {
+  const tests = firstRed()
+  tests.w.jobs.set(7, [
+    {
+      id: 72,
+      name: CHECK,
+      conclusion: "failure",
+      steps: [
+        { name: "Test", conclusion: "failure" },
+        { name: "Upload test artifacts", conclusion: "failure" },
+      ],
+    },
+  ])
+  assert.equal((await tests.triage()).action, "propose")
+
+  const install = firstRed()
+  install.w.jobs.set(7, [
+    {
+      id: 72,
+      name: CHECK,
+      conclusion: "failure",
+      steps: [
+        { name: "Install dependencies", conclusion: "failure" },
+        { name: "Build", conclusion: "skipped" },
+        { name: "Save the build cache", conclusion: "failure" },
+      ],
+    },
+  ])
+  assert.deepEqual(await install.triage(), { action: "rerun" })
+})
+
+test("a first failure that is not rerun still counts the attempts already made", async () => {
+  const second = firstRed("Test")
+  second.w.comment(1, attemptMarker(1))
+  const t = await second.triage()
+  assert.equal(t.action === "propose" ? t.attempt : 0, 2)
+
+  const spent = firstRed("Build")
+  for (let i = 1; i <= MAX_ATTEMPTS; i++) spent.w.comment(1, attemptMarker(i))
+  assert.equal((await spent.triage()).action, "give_up")
+})
+
+test("after its rerun a run goes on to the proposal whatever the step", async () => {
+  for (const step of ["Install dependencies", "Test"]) {
+    const { w, triage } = red()
+    w.jobs.set(7, [{ id: 72, name: CHECK, conclusion: "failure", steps: stepsFailingAt(step) }])
+    assert.equal((await triage()).action, "propose", step)
+  }
+})
+
+test("the workflow starts no triage runner for a head triage never patches", () => {
+  // triage answers `none` for these heads anyway; the job's condition keeps
+  // the runner from starting. A Release PR over a base that is not fully
+  // verified is red by design, and every such run would bill a minute here.
+  const file = new URL("../../../.github/workflows/train.yaml", import.meta.url)
+  const cond = String(parse(readFileSync(file, "utf8")).jobs["fix-triage"].if).replace(/\s+/g, " ")
+  assert.deepEqual(NEVER_PATCHED, ["release/", "promote/", "backmerge/", "hotfix/"])
+  for (const prefix of NEVER_PATCHED) {
+    assert.ok(
+      cond.includes(`!startsWith(github.event.workflow_run.head_branch, '${prefix}')`),
+      `${prefix} is missing from: ${cond}`,
+    )
+  }
+  assert.equal(cond.match(/startsWith\(/g)?.length, NEVER_PATCHED.length, "and no other head is kept out")
 })
 
 test("still red after the rerun: propose, numbered by the marker comments a Bot left", async () => {

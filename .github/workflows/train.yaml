@@ -11,8 +11,10 @@
 # the event that started the run is only a poke.
 #
 # Three more jobs are the Fix, for a Pipeline run whose Check failed on a pull
-# request (fix.ts): the failed jobs are rerun once; if the check is still red,
-# Claude Code proposes a patch and a guard decides whether it is committed.
+# request (fix.ts): the failed jobs are rerun once, unless the step that failed
+# was Lint, Test or Build — the same commit fails those the same way. For
+# those, and for a check still red after its rerun, Claude Code proposes a
+# patch and a guard decides whether it is committed.
 # Content the pull request controls and a token that can write never share a
 # job: Fix (propose) holds the tree and the Claude token, Fix (commit) holds
 # the App token and never checks the branch out.
@@ -40,7 +42,7 @@ on:
         description: Private key of that App
         required: false
       CLAUDE_CODE_OAUTH_TOKEN:
-        description: A `claude setup-token` token for the Fix; without it a red check is rerun and nothing more
+        description: A `claude setup-token` token for the Fix; without it a red check is at most rerun
         required: false
 
 permissions: {}
@@ -69,7 +71,12 @@ jobs:
     # anyone's pull request. A private one uses the caller's PIPELINE_RUNNER
     # variable (a JSON array of labels) when set. An event without
     # `repository.private` falls back to hosted, the safe side.
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    # Hosted means `ubuntu-slim`, the one-core container runner, billed at the
+    # one-core rate: this job waits for the API and for git and has no use for
+    # a second core. The image has bash, git, yq and Node, which is all the
+    # steps below use; none needs Docker or sudo. Its limit is 15 minutes a
+    # job, which is this job's own.
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
     timeout-minutes: 15
     # One train per repository, and a queued one waits: two runs must never
     # merge or tag at the same time.
@@ -181,11 +188,20 @@ jobs:
   fix-triage:
     name: Fix (triage)
     # Exactly `failure`: a cancelled run was superseded, not broken.
+    # The four heads are the ones triage never patches (NEVER_PATCHED in
+    # train/src/fix/triage.ts). It answers `none` for them anyway; named here,
+    # they start no runner. A Release PR over a base that has not passed the
+    # full Check is red by design, every time until the base is verified.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'failure' &&
-      github.event.workflow_run.event == 'pull_request'
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+      github.event.workflow_run.event == 'pull_request' &&
+      !startsWith(github.event.workflow_run.head_branch, 'release/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'promote/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'backmerge/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'hotfix/')
+    # API calls only, so the small runner; see the Train job.
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -268,7 +284,8 @@ jobs:
   # has no token that can write: the job's own is contents: read, the App
   # token is not minted, and the Claude token is in one step's environment.
   # Nothing from the tree is executed: no install, no test, no package script.
-  # Always a fresh hosted VM, never a runner that outlives the job.
+  # Always a fresh hosted VM, never a runner that outlives the job — and the
+  # full one, not `ubuntu-slim`: Claude Code gets two cores and 20 minutes.
   fix-propose:
     name: Fix (propose)
     needs: fix-triage
@@ -422,7 +439,8 @@ jobs:
     name: Fix (commit)
     needs: [fix-triage, fix-propose]
     if: always() && needs.fix-triage.outputs.action == 'propose'
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-latest"]') }}
+    # API calls only, so the small runner; see the Train job.
+    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
     timeout-minutes: 10
     permissions:
       contents: read
