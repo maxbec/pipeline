@@ -69,6 +69,22 @@ test("the first run opens the Release PR of dev; main has nothing to promote yet
   assert.deepEqual(writes(w, before), [])
 })
 
+test("a major repository that has never been promoted has no main: dev syncs, main is nothing", async () => {
+  const w = world(home, "no-main")
+  git(w.clone, "push", "-q", "origin", "--delete", "main")
+  w.land("feat: the endpoint (#1)")
+  const result = await run(w)
+  assert.equal(result.failed, false)
+  assert.deepEqual(
+    result.rows.map((r) => [r.branch, r.result]),
+    [
+      ["dev", "pr"],
+      ["main", "nothing"],
+    ],
+  )
+  assert.match(row(result, "main").reason ?? "", /no main branch/)
+})
+
 test("a beta, a promotion and a stable release, each merged by a person with the button", async () => {
   const w = world(home, "cycle")
   w.land("feat: the endpoint (#1)")
