@@ -6,12 +6,13 @@ import { ROOT, runStep, scratch, WORKFLOW, yaml } from "./helpers.mjs"
 
 const wf = () => yaml(WORKFLOW)
 
-test("the universal pipeline is exactly Guard, Check and Deploy", () => {
+test("the universal pipeline is Guard, Check and Deploy, plus the recheck that most runs never start", () => {
   const doc = wf()
   assert.ok(doc.on.workflow_call, "reusable workflow")
-  assert.deepEqual(Object.keys(doc.jobs), ["guard", "check", "deploy"])
+  assert.deepEqual(Object.keys(doc.jobs), ["guard", "check", "recheck", "deploy"])
   assert.equal(doc.jobs.guard.name, "Guard")
   assert.equal(doc.jobs.check.name, "Check")
+  assert.equal(doc.jobs.recheck.name, "Recheck Release PR")
   assert.match(String(doc.jobs.deploy.name), /^Deploy/)
 })
 
@@ -183,10 +184,15 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   assert.equal(check["runs-on"], "${{ fromJSON(needs.guard.outputs.check-runner) }}")
   assert.equal(
     doc.jobs.guard.outputs["check-runner"],
-    "${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true') && '[\"ubuntu-latest\"]' || steps.config.outputs.runner }}",
+    "${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && '[\"ubuntu-slim\"]' || steps.config.outputs.runner }}",
   )
   assert.equal(doc.jobs.guard.outputs.reuse, "${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}")
-  const [notice, ...rest] = check.steps
+  assert.equal(
+    doc.jobs.guard.outputs["reuse-note"],
+    "${{ steps.tree.outputs.reuse == 'true' && steps.tree.outputs.note || steps.reuse.outputs.note }}",
+  )
+  const [unverified, notice, ...rest] = check.steps
+  assert.equal(unverified.name, "Not fully verified")
   assert.equal(notice.if, "env.REUSE == 'true'")
   assert.match(notice.env.NOTE, /needs\.guard\.outputs\.reuse-note/)
   const marker = rest.splice(-2)
@@ -254,17 +260,186 @@ test("a passing Check marks its tree last, under the name Guard looks up", () =>
   assert.match(write.run, /\$RUNNER_TEMP\/checked-tree\.json/)
   const build = steps.find((s) => s.name === "Upload build artifact")
   assert.equal(upload.uses, build.uses, "same upload-artifact pin as the build artifact")
-  assert.equal(upload.with.name, "pipeline-checked-tree-${{ needs.guard.outputs.tree }}")
+  // The name is Guard's: pipeline-checked-tree after a full Check (every
+  // Check of a repository without test.pr_command), pipeline-fast-tree after
+  // a fast one. test/depth.test.mjs runs the step that decides.
+  assert.equal(upload.with.name, "${{ needs.guard.outputs.marker }}-${{ needs.guard.outputs.tree }}")
+  assert.equal(doc.jobs.guard.outputs.marker, "${{ steps.marker.outputs.name }}")
   assert.equal(upload.with.path, "${{ runner.temp }}/checked-tree.json")
   assert.equal(upload.with.overwrite, true, "a re-run must not 409 on its earlier attempt's name")
+  assert.equal(
+    write.run,
+    `printf '{"tree":"%s","sha":"%s","run":"%s","attempt":"%s"}\\n' \\\n  "$TREE" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/checked-tree.json"\n`,
+    "the marker's content is what it was before the depths",
+  )
   const lookup = doc.jobs.guard.steps.find((s) => s.id === "tree")
-  assert.match(lookup.run, /name=pipeline-checked-tree-\$tree/, "Guard searches the name Check writes")
+  assert.match(lookup.run, /names=\(pipeline-checked-tree\)/, "Guard searches the name Check writes")
+  assert.match(lookup.run, /artifacts\?name=\$name-\$tree&/)
+  const naming = doc.jobs.guard.steps.find((s) => s.id === "marker")
+  assert.equal(doc.jobs.guard.steps.at(-1), naming, "named last, once both reuse steps have spoken")
+  assert.equal(naming.if, undefined, "always named: a Check without a name could not mark its tree")
+  assert.deepEqual(naming.env, {
+    DEPTH: "${{ steps.depth.outputs.depth }}",
+    FAST_MODE: "${{ steps.config.outputs.fast-mode }}",
+    RELEASE_RULE: "${{ steps.reuse.outputs.reuse }}",
+  })
   const release = doc.jobs.guard.steps.find((s) => s.id === "reuse")
   assert.ok(
     doc.jobs.guard.steps.indexOf(lookup) < doc.jobs.guard.steps.indexOf(release),
     "the tree lookup runs first; the Release PR rule only when it found nothing",
   )
   assert.match(release.if, /steps\.tree\.outputs\.reuse != 'true'/)
+})
+
+// --- the two depths of Check (test.pr_command) ------------------------------
+
+test("Guard runs on the one-core hosted runner, with the permissions it had", () => {
+  const guard = wf().jobs.guard
+  assert.equal(guard["runs-on"], "ubuntu-slim", "never the configured runner: Guard only reads files and asks the API")
+  assert.equal(guard["timeout-minutes"], 5, "well inside that runner's 15-minute limit")
+  assert.deepEqual(guard.permissions, { contents: "read", "pull-requests": "read", actions: "read" })
+  for (const step of guard.steps) {
+    assert.ok(!/(^|[\s;&|(])(docker|sudo)\s/m.test(String(step.run ?? "")), `"${step.name}" calls what a container runner lacks`)
+    if (step.uses) assert.match(step.uses, /^actions\/checkout@[0-9a-f]{40}$/, "the checkout is Guard's only action")
+  }
+})
+
+test("Guard names the depth before either reuse step and hands it to Check", () => {
+  const doc = wf()
+  const guard = doc.jobs.guard
+  const at = (id) => guard.steps.findIndex((s) => s.id === id)
+  assert.ok(at("config") < at("depth") && at("depth") < at("tree") && at("tree") < at("reuse") && at("reuse") < at("marker"))
+  const depth = guard.steps[at("depth")]
+  assert.equal(depth.if, undefined, "every run has a depth")
+  assert.deepEqual(depth.env, {
+    FAST_MODE: "${{ steps.config.outputs.fast-mode }}",
+    EVENT_NAME: "${{ github.event_name }}",
+    HEAD_REF: "${{ github.event.pull_request.head.ref }}",
+  })
+  assert.equal(guard.outputs.depth, "${{ steps.depth.outputs.depth }}")
+  assert.equal(guard.outputs["fast-mode"], "${{ steps.config.outputs.fast-mode }}")
+  assert.equal(guard.outputs["test-pr-command-b64"], "${{ steps.config.outputs.test-pr-command-b64 }}")
+  assert.equal(guard.outputs.unverified, "${{ steps.reuse.outputs.unverified }}")
+  assert.equal(guard.outputs["unverified-note"], "${{ steps.reuse.outputs.unverified-note }}")
+  assert.equal(guard.steps[at("tree")].env.DEPTH, "${{ steps.depth.outputs.depth }}")
+  assert.equal(guard.steps[at("reuse")].env.FAST_MODE, "${{ steps.config.outputs.fast-mode }}")
+})
+
+test("the tree lookup runs on a dispatch and a schedule only in fast mode", () => {
+  // Without test.pr_command a dispatched run is what it always was: a Check
+  // that looks nothing up, runs everything and leaves no marker.
+  const lookup = wf().jobs.guard.steps.find((s) => s.id === "tree")
+  assert.equal(
+    lookup.if,
+    "github.event_name == 'push' || github.event_name == 'pull_request' || (steps.config.outputs.fast-mode == 'true' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'))",
+  )
+  const release = wf().jobs.guard.steps.find((s) => s.id === "reuse")
+  assert.equal(
+    release.if,
+    "github.event_name == 'pull_request' && steps.tree.outputs.reuse != 'true' && (startsWith(github.event.pull_request.head.ref, 'release/') || startsWith(github.event.pull_request.head.ref, 'promote/'))",
+    "the Release PR rule starts when it always did",
+  )
+})
+
+test("PIPELINE_DEPTH reaches Lint, Test and Build, and nothing else", () => {
+  const check = wf().jobs.check
+  const withDepth = check.steps.filter((s) => s.env && "PIPELINE_DEPTH" in s.env).map((s) => s.name)
+  assert.deepEqual(withDepth, ["Lint (trunk)", "Lint", "Test", "Build"])
+  for (const step of check.steps.filter((s) => withDepth.includes(s.name))) {
+    assert.equal(step.env.PIPELINE_DEPTH, "${{ needs.guard.outputs.depth }}", step.name)
+  }
+  assert.equal(check.env.PIPELINE_DEPTH, undefined, "not job-wide: installs and third-party actions do not see it")
+  const tests = check.steps.find((s) => s.id === "test")
+  assert.equal(tests.env.TEST_PR_COMMAND_B64, "${{ needs.guard.outputs.test-pr-command-b64 }}")
+  assert.equal(tests.env.TEST_COMMAND_B64, "${{ needs.guard.outputs.test-command-b64 }}")
+})
+
+test("an unverified Release PR fails in the first step, so nothing runs and no marker is written", () => {
+  const check = wf().jobs.check
+  const [unverified, ...rest] = check.steps
+  assert.equal(unverified.id, "unverified")
+  assert.equal(unverified.if, "needs.guard.outputs.unverified == 'true'")
+  assert.match(unverified.run, /exit 1\n$/, "it ends red, whatever came before")
+  assert.equal(unverified["continue-on-error"], undefined)
+  assert.equal(unverified.env.NOTE, "${{ needs.guard.outputs.unverified-note }}")
+  assert.equal(unverified.env.BASE_REF, "${{ github.event.pull_request.base.ref }}")
+  // A step runs after a failed one only if its condition names a status
+  // function. One does: the test artifacts, which need a failed Test step.
+  for (const step of rest) {
+    const cond = String(step.if ?? "")
+    if (/\b(always|failure|cancelled)\(\)/.test(cond)) {
+      assert.equal(step.name, "Upload test artifacts", `"${step.name}" would run on an unverified Release PR: if: ${cond}`)
+      assert.match(cond, /steps\.test\.outcome == 'failure'/)
+    }
+  }
+})
+
+test("the recheck starts only after a green full Check on a dispatch or a schedule in fast mode", () => {
+  // Job-level, so nothing starts and nothing is billed on a pull request, on
+  // a push, on a release, or in a repository without test.pr_command.
+  const recheck = wf().jobs.recheck
+  assert.deepEqual(recheck.needs, ["guard", "check"], "after Check: the full marker is up before the Release PR looks for it")
+  assert.equal(
+    recheck.if,
+    "(github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.check.result == 'success' && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full' && needs.guard.outputs.tree != ''",
+  )
+  assert.ok(!/\b(always|failure|cancelled)\(\)/.test(recheck.if), "no status function: a failed or skipped Check skips it")
+  assert.equal(recheck["runs-on"], "ubuntu-slim")
+  assert.equal(recheck["timeout-minutes"], 5)
+  assert.equal(recheck["continue-on-error"], true, "it never fails the workflow")
+  assert.equal(recheck.env, undefined)
+})
+
+test("the recheck re-runs the whole run, executes nothing from the repository and holds no more than it needs", () => {
+  const recheck = wf().jobs.recheck
+  assert.deepEqual(recheck.permissions, { actions: "write", "pull-requests": "read" })
+  assert.equal(recheck.steps.length, 1)
+  const [rerun] = recheck.steps
+  assert.equal(rerun.id, "rerun")
+  assert.equal(rerun.uses, undefined, "no checkout, no action: nothing a pull request controls runs beside this token")
+  assert.equal(rerun["continue-on-error"], true)
+  assert.match(rerun.run, /gh run rerun "\$id" -R "\$REPO"/, "all jobs: Guard has to answer again")
+  assert.ok(!/--failed|rerun-failed-jobs/.test(rerun.run), "re-running Check alone would repeat Guard's old answer")
+  assert.ok(!/::error::|exit [1-9]/.test(rerun.run), "whatever goes wrong is a notice")
+  assert.deepEqual(rerun.env, {
+    GH_TOKEN: "${{ github.token }}",
+    REPO: "${{ github.repository }}",
+    BRANCH: "${{ github.ref_name }}",
+    REF_TYPE: "${{ github.ref_type }}",
+  })
+})
+
+test("only the recheck asks for actions: write; Check asks its caller for no more than it did", () => {
+  // Check runs the repository's code (install, lint, test, build) beside the
+  // token the checkout persists, so it stays on what it had. A called
+  // workflow may not ask for more than its caller grants: the rendered caller
+  // and this repository's own grant `actions: write` for the recheck.
+  const jobs = wf().jobs
+  assert.deepEqual(jobs.check.permissions, { contents: "read", "pull-requests": "read", checks: "write" })
+  assert.equal(jobs.guard.permissions.actions, "read")
+  const writers = Object.entries(jobs).filter(([, job]) => job.permissions?.actions === "write").map(([id]) => id)
+  assert.deepEqual(writers, ["recheck"])
+  for (const [id, job] of Object.entries(jobs)) assert.ok(job.permissions, `${id} names its permissions`)
+  for (const caller of ["ci.yaml", "examples/caller.yaml"]) {
+    const granted = yaml(join(ROOT, ".github/workflows", caller)).jobs.pipeline.permissions
+    assert.equal(granted.actions, "write", `${caller} grants what the recheck asks for, or the workflow does not start`)
+    assert.equal(granted["pull-requests"], "read", caller)
+  }
+  assert.ok(!jobs.check.steps.some((s) => /rerun/.test(String(s.run ?? ""))), "Check re-runs nothing")
+})
+
+test("no expression is interpolated into a script of the pipeline's depth steps", () => {
+  const doc = wf()
+  const steps = [
+    ...doc.jobs.guard.steps.filter((s) => ["depth", "tree", "reuse", "marker"].includes(s.id)),
+    ...doc.jobs.check.steps.filter((s) => ["unverified", "test"].includes(s.id)),
+    ...doc.jobs.recheck.steps,
+  ]
+  assert.equal(steps.length, 7)
+  for (const step of steps) {
+    assert.ok(!String(step.run).includes("${{"), `"${step.name}" interpolates an expression into its script`)
+    assert.match(String(step.run), /^set -euo pipefail\n/, `"${step.name}" starts strict`)
+  }
 })
 
 // --- the Train workflow ---------------------------------------------------

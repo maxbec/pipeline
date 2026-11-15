@@ -315,3 +315,81 @@ test("the v2 blocks deployment: and pipeline: are still refused", () => {
     assert.doesNotMatch(r.stdout + r.stderr, /belong to/, "the message says what to do, not who owns releases")
   }
 })
+
+// --- test.pr_command: the switch for the two depths of Check -----------------
+
+test("test.pr_command is encoded like the other commands and switches fast mode on", () => {
+  const r = parse(`version: '3'\ntest:\n  command: pnpm test\n  pr_command: pnpm test:affected\n`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(command(r.outputs, "test-pr-command"), "pnpm test:affected")
+  assert.equal(command(r.outputs, "test-command"), "pnpm test", "the full command is untouched")
+  assert.equal(r.outputs["fast-mode"], "true")
+  assert.equal(r.outputs["test-pr-command"], undefined, "never in plaintext")
+  const block = parse(`version: '3'\ntest:\n  pr_command: |\n    pnpm test:unit\n    pnpm test:smoke\n`)
+  assert.equal(command(block.outputs, "test-pr-command"), "pnpm test:unit\npnpm test:smoke")
+  assert.equal(block.outputs["fast-mode"], "true", "fast mode needs no test.command")
+})
+
+test("without test.pr_command fast mode is off and the command is empty", () => {
+  for (const config of [
+    minimal,
+    `version: '3'\ntest:\n  command: pnpm test\n`,
+    `version: '3'\ntest:\n  pr_command: ''\n`,
+    `version: '3'\ntest:\n  pr_command: "  "\n`,
+    `version: '3'\ntest:\n  pr_command:\n`,
+    `version: '3'\ntest:\n  pr_command: null\n`,
+  ]) {
+    const r = parse(config)
+    assert.equal(r.status, 0, `${JSON.stringify(config)}: ${r.stderr}`)
+    assert.equal(r.outputs["fast-mode"], "false", JSON.stringify(config))
+    assert.equal(command(r.outputs, "test-pr-command"), "", JSON.stringify(config))
+  }
+})
+
+test("a test.pr_command that is not a string is a configuration error", () => {
+  for (const value of ["true", "3", "[pnpm, test]", "{run: pnpm test}"]) {
+    const r = parse(`version: '3'\ntest:\n  pr_command: ${value}\n`)
+    assert.equal(r.status, 1, value)
+    assert.match(r.stdout, /::error::pipeline\.yaml: test\.pr_command must be a string/, value)
+    assert.equal(r.outputs["fast-mode"], undefined, `no mode from a bad value: ${value}`)
+  }
+})
+
+test("test.pr_command adds two outputs and changes no other", () => {
+  // The outputs a config without it produced before the depths existed, in
+  // the order the step writes them. A repository that does not opt in gets
+  // these, byte for byte, plus an empty command and fast-mode=false.
+  const before = [
+    "stack", "node-version", "python-version", "package-manager", "runner", "cache", "dependency-cache", "build-cache",
+    "pnpm-version", "security", "trufflehog", "dependency-review", "fail-on-secrets", "fail-on-vulnerabilities", "lint",
+    "lint-command-b64", "test", "test-command-b64", "test-artifact-path", "build", "build-command-b64", "artifact-path",
+    "deploy-provider", "deploy-targets", "primary-target", "vercel-scope", "vercel-preview-alias",
+    "vercel-build-command-b64", "cloudflare-config", "cloudflare-build-command-b64", "docker-cache-backend", "render-hook",
+  ]
+  const added = ["test-pr-command-b64", "fast-mode"]
+  const config = `version: '3'
+stack: nodejs
+runtime:
+  node_version: 24.1.0
+lint:
+  command: pnpm lint
+test:
+  command: pnpm test
+  artifact_path: test-results
+build:
+  command: pnpm build
+deploy:
+  provider: vercel
+  vercel:
+    scope: team
+`
+  const without = parse(config)
+  assert.equal(without.status, 0, without.stderr)
+  assert.deepEqual(Object.keys(without.outputs).filter((k) => !added.includes(k)), before)
+  assert.deepEqual(Object.keys(without.outputs).filter((k) => added.includes(k)), added)
+  const withIt = parse(config.replace("  command: pnpm test\n", "  command: pnpm test\n  pr_command: pnpm test:fast\n"))
+  assert.equal(withIt.status, 0, withIt.stderr)
+  assert.notEqual(withIt.outputs["test-pr-command-b64"], without.outputs["test-pr-command-b64"])
+  for (const key of before) assert.equal(withIt.outputs[key], without.outputs[key], key)
+  assert.equal(without.stdout, withIt.stdout, "the step's log line is the same")
+})
