@@ -241,10 +241,29 @@ test("runtime.dependency_cache: false leaves a store that outlives the job alone
   assert.match(bad.stdout, /dependency_cache must be true or false/)
 })
 
-test("the Docker layer cache stays on a self-hosted runner unless the config names a backend", () => {
+test("runtime.build_cache is off unless asked for, and follows the dependency cache", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "package.json"), "{}")
+  writeFileSync(join(dir, "pnpm-lock.yaml"), "")
+  const run = (config, env = {}) => {
+    writeFileSync(join(dir, "pipeline.yaml"), config)
+    return runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml", ...env })
+  }
+  assert.equal(run(minimal).outputs["build-cache"], "false")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n`).outputs["build-cache"], "true")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: false\n`).outputs["build-cache"], "false")
+  const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n`, homelab).outputs["build-cache"], "false", "a runner that keeps its disk keeps its own")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n  dependency_cache: true\n`, homelab).outputs["build-cache"], "true")
+  const bad = run(`${minimal}runtime:\n  build_cache: yes please\n`)
+  assert.notEqual(bad.status, 0)
+  assert.match(bad.stdout, /build_cache must be true or false/)
+})
+
+test("the Docker layer cache is off on a hosted runner and local on a self-hosted one unless the config names a backend", () => {
   const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
   const backend = (config, env = {}) => parse(config, env).outputs["docker-cache-backend"]
-  assert.equal(backend(minimal), "gha", "hosted runners keep the GitHub cache")
+  assert.equal(backend(minimal), "none", "a release's cache scope is its tag, which no later release reads")
   assert.equal(backend(minimal, homelab), "local", "a homelab uplink does not carry every layer")
   assert.equal(backend(`${minimal}runner:\n  labels: [self-hosted, crewsy-unraid]\n`), "local")
   assert.equal(backend(`${minimal}deploy:\n  docker:\n    cache_backend: gha\n`, homelab), "gha", "an explicit backend wins")
