@@ -34,6 +34,7 @@ lint:
 test:
   enable: true
   command: '' # default: `<pm> test` if the script exists; python: `pytest` when tests/ exists
+  pr_command: '' # optional: what a fast Check runs instead of `command`. Setting it switches the two depths on, see "Two depths of Check"
   artifact_path: '' # optional: uploaded as test-artifacts-<run>-<attempt> for 7 days, only when the tests fail
 
 build:
@@ -73,10 +74,71 @@ release: # optional; read by the Train workflow, validated by Guard
 
 | job | reads | runs on |
 |---|---|---|
-| Guard | everything above; on pull requests also the PR title and branches | ubuntu-latest |
-| Check | `security`, `lint`, `test`, `build`, `runtime`, `stack` | `runner.labels` |
+| Guard | everything above; on pull requests also the PR title and branches | ubuntu-slim (one core, GitHub-hosted) |
+| Check | `security`, `lint`, `test`, `build`, `runtime`, `stack` | `runner.labels`; ubuntu-slim when it only reports an earlier result or "not fully verified" |
 | Deploy | `deploy`, `runtime`, `stack` | `runner.labels` |
 | Train (second workflow) | `release` | `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-latest |
+
+## Two depths of Check
+
+Without `test.pr_command` nothing here applies: every Check runs
+`test.command`, as it always did.
+
+A repository that sets `test.pr_command` gets two depths. **Fast** runs lint,
+the `pr_command` and build. **Full** runs lint, `test.command` and build. The
+`pr_command` is whatever the repository can answer for on every pull request:
+the unit tests, the tests of the packages a change touches. `test.command`
+stays the whole suite.
+
+| run | depth | test command |
+|---|---|---|
+| pull request, any head but `hotfix/*` and `release/*` | fast | `test.pr_command` |
+| push to `dev` / `main` | fast | `test.pr_command` |
+| pull request from `hotfix/*` | full | `test.command` |
+| `workflow_dispatch`, `schedule` | full | `test.command` |
+| Release PR (`release/*` head) | none of its own: green only when the tip of its base branch has passed the full Check, otherwise red at once as "not fully verified" | |
+| promotion (`promote/*` head) | none of its own, as before: it stands on the green push run of the Release it promotes | |
+
+So **a Release PR is green only when the tip of its base branch has passed the
+full Check.** A Release PR that is more than its base tip plus a version (a
+commit by hand, a base that moved on) is checked itself, in full.
+
+**`PIPELINE_DEPTH`** is `fast` or `full` in the environment of the Lint, Test
+and Build steps, for the repository's own scripts (a build that skips an
+expensive target on a pull request, say). It is `full` in a repository without
+a `pr_command`, and unset under a pin older than the depths: read unset as
+`full`.
+
+**Markers.** A passing Check leaves an artifact named after its tree and its
+depth: `pipeline-checked-tree-<tree>` after a full Check,
+`pipeline-fast-tree-<tree>` after a fast one. The first is the only name
+there was before, so older markers count as full. A full run stands down only
+for a full marker, a fast run for either. A Release PR that stood on its
+base's full marker leaves the fast name for its own tree.
+
+**Starting a full run.** Once the caller listens for it (`workflow_dispatch`,
+and a nightly `schedule` in a repository with a `pr_command`):
+
+```sh
+gh workflow run ci.yaml --ref dev -R <owner>/<repo>
+```
+
+It runs the full Check on the tip of that branch, or takes seconds when that
+tree already carries a full marker. When it is green, the Release PR onto the
+branch passes on its next run.
+
+**A red Release PR, "Not fully verified".** The tip of the base branch has no
+full marker yet: nobody ran the full Check on it since the last merge, or the
+nightly run has not come round. The Check fails within seconds, on the
+one-core runner, without running anything, and its error names the command
+above. Run it, then re-run **all jobs** of the Release PR's Pipeline run:
+re-running only the failed Check repeats Guard's old answer. The same error
+with "the … API did not answer" means Guard could not look; re-running all
+jobs is enough. A green full run on a dispatch or a schedule looks for the open
+Release PR onto its branch and re-runs its failed Pipeline run by itself. That
+needs `actions: write`, which Check does not ask its caller for yet (a caller
+that still grants `actions: read` would not start at all); until it does, the
+step prints the run to re-run: `gh run rerun <id>`.
 
 ## `release:`
 

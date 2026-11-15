@@ -66,7 +66,10 @@ on:
 jobs:
   guard:
     name: Guard
-    runs-on: ubuntu-latest
+    # The one-core container runner: Guard reads a few files and asks the API,
+    # with bash, yq, jq, gh, git and python3, all of which that image carries.
+    # It has no Docker and a 15-minute limit, neither of which Guard comes near.
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -91,6 +94,13 @@ jobs:
       lint-command-b64: ${{ steps.config.outputs.lint-command-b64 }}
       test: ${{ steps.config.outputs.test }}
       test-command-b64: ${{ steps.config.outputs.test-command-b64 }}
+      test-pr-command-b64: ${{ steps.config.outputs.test-pr-command-b64 }}
+      # test.pr_command is set: this repository runs two depths of Check. Fast
+      # (lint, the pr_command, build) on pull requests and pushes, full (lint,
+      # test.command, build) on a dispatch, a schedule, a hotfix and wherever a
+      # Release PR has to be checked itself. Without it everything is full.
+      fast-mode: ${{ steps.config.outputs.fast-mode }}
+      depth: ${{ steps.depth.outputs.depth }}
       test-artifact-path: ${{ steps.config.outputs.test-artifact-path }}
       build: ${{ steps.config.outputs.build }}
       build-command-b64: ${{ steps.config.outputs.build-command-b64 }}
@@ -107,11 +117,19 @@ jobs:
       render-hook: ${{ steps.config.outputs.render-hook }}
       reuse: ${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}
       reuse-note: ${{ steps.tree.outputs.reuse == 'true' && steps.tree.outputs.note || steps.reuse.outputs.note }}
+      # Fast mode only: a Release PR whose base tip has not passed the full
+      # Check. Check fails at once and runs nothing; it is never a reuse.
+      unverified: ${{ steps.reuse.outputs.unverified }}
+      unverified-note: ${{ steps.reuse.outputs.unverified-note }}
       tree: ${{ steps.tree.outputs.tree }}
-      # A reused Check needs no tooling, so it does not queue for the
-      # configured runner — often one self-hosted box that the work it saves
-      # would otherwise occupy.
-      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true') && '["ubuntu-latest"]' || steps.config.outputs.runner }}
+      # The artifact name a green Check leaves for its tree, without the tree:
+      # pipeline-checked-tree after a full Check, pipeline-fast-tree after a
+      # fast one.
+      marker: ${{ steps.marker.outputs.name }}
+      # A reused Check needs no tooling, and one that only reports "not fully
+      # verified" needs none either, so neither takes the configured runner:
+      # the one-core runner Guard uses is enough.
+      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && '["ubuntu-slim"]' || steps.config.outputs.runner }}
     steps:
       - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -289,6 +307,17 @@ jobs:
           b64 lint-command "$(str '.lint.command' '')"
           bool test '.test.enable' true
           b64 test-command "$(str '.test.command' '')"
+          # test.pr_command: what a fast Check runs instead of test.command.
+          # Setting it is the switch for the two depths ("How deep does this
+          # Check go?"); a repository without it is checked in full every time.
+          case "$(yq -r '.test.pr_command | tag' "$CONFIG_FILE")" in
+            '!!null'|'!!str') ;;
+            *) bad "test.pr_command must be a string: the command a fast Check runs instead of test.command." ;;
+          esac
+          PR_COMMAND=$(str '.test.pr_command' '')
+          if [[ ! "$PR_COMMAND" =~ [^[:space:]] ]]; then PR_COMMAND=""; fi
+          b64 test-pr-command "$PR_COMMAND"
+          if [[ -n "$PR_COMMAND" ]]; then out fast-mode true; else out fast-mode false; fi
           out test-artifact-path "$(str '.test.artifact_path' '')"
           bool build '.build.enable' true
           b64 build-command "$(str '.build.command' '')"
@@ -339,6 +368,38 @@ jobs:
           out docker-cache-backend "$DOCKER_CACHE"
           bool render-hook '.deploy.render.hook' false
           echo "stack=$STACK runner=$RUNNER provider=$PROVIDER targets=$TARGETS"
+
+      # Two depths, for a repository that sets test.pr_command (fast mode).
+      # Fast runs lint, the pr_command and build: every pull request and every
+      # push. Full runs lint, test.command and build: a dispatch and a schedule
+      # (how the tip of a branch gets its full Check before a release), a
+      # hotfix (it goes straight into main) and a Release PR that has to be
+      # checked itself because it is more than its base plus a version. Only
+      # the two events named here are fast; anything else is full, and so is
+      # every run of a repository without a pr_command.
+      - name: How deep does this Check go?
+        id: depth
+        shell: bash
+        env:
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          depth=full
+          if [[ "${FAST_MODE:-}" == "true" ]]; then
+            case "${EVENT_NAME:-}" in
+              push) depth=fast ;;
+              pull_request)
+                case "${HEAD_REF:-}" in
+                  hotfix/*|release/*) ;;
+                  *) depth=fast ;;
+                esac
+                ;;
+            esac
+          fi
+          echo "depth=$depth" >> "$GITHUB_OUTPUT"
+          echo "Depth: $depth (fast mode ${FAST_MODE:-false}, ${EVENT_NAME:-no event}${HEAD_REF:+ from $HEAD_REF})"
 
       - name: Does this repository have a dev branch?
         id: dev
@@ -406,33 +467,50 @@ jobs:
       # Check report that result instead of recomputing it. Markers from a fork
       # do not count: a fork's pull request runs the workflow from its own head
       # and could upload any name. No marker, an API error included, runs the
-      # full Check.
+      # Check.
+      #
+      # The marker's name carries the depth of the Check that left it:
+      # pipeline-checked-tree-<tree> after a full Check (the only name there
+      # was before the depths, so every older marker counts as full) and
+      # pipeline-fast-tree-<tree> after a fast one. A full run stands down only
+      # for a full marker; a fast run for either, since the full Check covers
+      # what the fast one runs. In fast mode a dispatch and a schedule look
+      # too: a second full run of a tree that already passed takes seconds.
       - name: Was this tree checked green before?
         id: tree
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'push' || github.event_name == 'pull_request'
+          || (steps.config.outputs.fast-mode == 'true' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          DEPTH: ${{ steps.depth.outputs.depth }}
         run: |
           set -euo pipefail
-          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
+          label="Full Check"; names=(pipeline-checked-tree)
+          if [[ "${DEPTH:-full}" == "fast" ]]; then label="Fast Check"; names+=(pipeline-fast-tree); fi
+          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "$label: $1"; exit 0; }
           tree=$(gh api "repos/$REPO/git/commits/$SHA" --jq '.tree.sha' 2>/dev/null) || full "the commits API did not answer"
           [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || full "${SHA:0:7} names no tree"
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
-          runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$tree&per_page=100" \
-            --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
-                    and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
-                  | unique | .[]' 2>/dev/null) || full "the artifacts API did not answer"
-          for run in $runs; do
-            info=$(gh api "repos/$REPO/actions/runs/$run" --jq '[.path, .head_branch, .head_sha] | @tsv' 2>/dev/null) || continue
-            IFS=$'\t' read -r path branch head <<< "$info"
-            [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
-            note="Lint, test and build passed on the identical tree ${tree:0:7} in run $run ($branch at ${head:0:7}), so that result stands."
-            { echo "reuse=true"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
-            echo "$note"
-            exit 0
+          for name in "${names[@]}"; do
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=$name-$tree&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                    | unique | .[]' 2>/dev/null) || full "the artifacts API did not answer"
+            what="Lint, test and build"
+            if [[ "$name" == "pipeline-fast-tree" ]]; then what="Lint, the fast tests and build"; fi
+            for run in $runs; do
+              info=$(gh api "repos/$REPO/actions/runs/$run" --jq '[.path, .head_branch, .head_sha] | @tsv' 2>/dev/null) || continue
+              IFS=$'\t' read -r path branch head <<< "$info"
+              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+              note="$what passed on the identical tree ${tree:0:7} in run $run ($branch at ${head:0:7}), so that result stands."
+              { echo "reuse=true"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "$note"
+              exit 0
+            done
           done
           full "no Check of tree ${tree:0:7} has passed yet"
 
@@ -454,6 +532,16 @@ jobs:
       # promotion were the two that ran lint, test and build). It reuses the
       # push run of the Release it promotes, provided the merge into the base
       # yields the head's own tree — a base with commits of its own is new code.
+      #
+      # In fast mode the base's push run is a fast Check, and a release must
+      # not stand on that. A Release PR (`release/*`) then asks for more: the
+      # tree of the base tip has to carry a full marker, left by a dispatched
+      # or scheduled run of that branch (or by a hotfix's Check). Without one
+      # the answer is `unverified`: Check fails at once, names the command
+      # that runs the full Check, and runs nothing. That is never a reuse. A
+      # Release PR that is more than its base plus a version is checked
+      # itself, in full ("How deep does this Check go?"). The promotion is
+      # unchanged: it stands on the push run of the Release it promotes.
       - name: Is this a Release PR over a green base?
         id: reuse
         if: >-
@@ -470,6 +558,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.sha }}
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
         run: |
           set -euo pipefail
           full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
@@ -528,6 +617,35 @@ jobs:
                   sys.exit(name + " changes more than its version")
           PY
           ) || full "$verdict"
+          if [[ "${FAST_MODE:-}" == "true" && "${HEAD_REF:-}" == release/* ]]; then
+            # Fails closed: an API that does not answer is "not verified" too.
+            # Re-running all jobs of this run asks again.
+            unverified() {
+              { echo "reuse=false"; echo "unverified=true"; echo "unverified-note=$1"; } >> "$GITHUB_OUTPUT"
+              echo "Not fully verified: $1"
+              exit 0
+            }
+            green_tree=$(gh api "repos/$REPO/git/commits/$GREEN_SHA" --jq '.tree.sha' 2>/dev/null) \
+              || unverified "the commits API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
+            [[ "$green_tree" =~ ^[0-9a-f]{40}$ ]] \
+              || unverified "${GREEN_SHA:0:7} names no tree, so nothing shows that $GREEN_NAME passed the full Check"
+            # The same conditions as "Was this tree checked green before?":
+            # live, from this repository's own pipeline, never from a fork.
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$green_tree&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                    | unique | .[]' 2>/dev/null) \
+              || unverified "the artifacts API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
+            for run in $runs; do
+              path=$(gh api "repos/$REPO/actions/runs/$run" --jq '.path' 2>/dev/null) || continue
+              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+              note="The full Check passed on $GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}, run $run); this head adds only the version and the changelog, so that result stands."
+              { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "Reusing the full Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
+              exit 0
+            done
+            unverified "$GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}) has not passed the full Check"
+          fi
           runs=$(gh api "repos/$REPO/actions/runs?head_sha=$GREEN_SHA&event=push$GREEN_BRANCH&per_page=20" \
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \
             || full "the runs API did not answer"
@@ -535,6 +653,29 @@ jobs:
           note="Lint, test and build passed on $GREEN_NAME at ${GREEN_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
           { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
           echo "Reusing the Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
+
+      # Last in Guard, once both reuse steps have spoken. The full name is the
+      # one a release stands on, so it is written only by a run that was full
+      # itself or stood down for a full marker of its very own tree. A fast
+      # run writes the fast name, also when it stood down for a full marker.
+      # So does every run that stood down under the Release PR rule in fast
+      # mode: its tree is another commit's plus a version, which the rule
+      # checks anew each time instead of taking it from a marker.
+      - name: Name the tree marker
+        id: marker
+        shell: bash
+        env:
+          DEPTH: ${{ steps.depth.outputs.depth }}
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
+          RELEASE_RULE: ${{ steps.reuse.outputs.reuse }}
+        run: |
+          set -euo pipefail
+          name=pipeline-fast-tree
+          if [[ "${DEPTH:-}" == "full" ]] && ! [[ "${FAST_MODE:-}" == "true" && "${RELEASE_RULE:-}" == "true" ]]; then
+            name=pipeline-checked-tree
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "A green Check marks its tree as $name."
 
   check:
     name: Check
@@ -555,6 +696,36 @@ jobs:
       # runner, in seconds.
       REUSE: ${{ needs.guard.outputs.reuse }}
     steps:
+      # Fast mode only. The first step, and it fails: every step below is
+      # skipped, so nothing is checked and no marker is written. Re-running
+      # only the failed job would repeat Guard's old answer; the whole run has
+      # to be re-run for Guard to look again.
+      - name: Not fully verified
+        id: unverified
+        if: needs.guard.outputs.unverified == 'true'
+        shell: bash
+        env:
+          NOTE: ${{ needs.guard.outputs.unverified-note }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Not fully verified"
+            echo
+            echo "$NOTE."
+            echo
+            echo "A Release PR is green only when the tip of its base branch has passed the full Check. Run it:"
+            echo
+            echo '```sh'
+            echo "gh workflow run ci.yaml --ref $BASE_REF -R $REPO"
+            echo '```'
+            echo
+            echo "A green full run re-runs this Pipeline run by itself where it may. Otherwise re-run all of its jobs, not only the failed one: Guard has to look again."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Not fully verified: $NOTE. Run the full Check on $BASE_REF with: gh workflow run ci.yaml --ref $BASE_REF -R $REPO — then re-run all jobs of this run (a green full run does that by itself where it may)."
+          exit 1
+
       - name: Reuse an earlier Check
         if: env.REUSE == 'true'
         shell: bash
@@ -783,6 +954,8 @@ jobs:
       - name: Lint (trunk)
         if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
         uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
+        env:
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
         with:
           # ~/.cache/trunk follows the dependency cache: a runner that keeps its
           # package store keeps trunk's tools as well.
@@ -792,6 +965,7 @@ jobs:
         shell: bash
         env:
           LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
         run: |
           set -euo pipefail
           LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
@@ -806,10 +980,20 @@ jobs:
         shell: bash
         env:
           TEST_COMMAND_B64: ${{ needs.guard.outputs.test-command-b64 }}
+          TEST_PR_COMMAND_B64: ${{ needs.guard.outputs.test-pr-command-b64 }}
+          # fast or full, for the repository's own scripts in Lint, Test and
+          # Build. Older pins of this workflow do not set it: unset means full.
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
           CI: 'true'
         run: |
           set -euo pipefail
           TEST_COMMAND=$(base64 -d <<< "$TEST_COMMAND_B64")
+          # A fast Check runs test.pr_command in place of test.command. Only
+          # then: a full Check never reads it.
+          if [[ "${PIPELINE_DEPTH:-full}" == "fast" ]]; then
+            TEST_PR_COMMAND=$(base64 -d <<< "$TEST_PR_COMMAND_B64")
+            if [[ -n "$TEST_PR_COMMAND" ]]; then TEST_COMMAND="$TEST_PR_COMMAND"; fi
+          fi
           if [[ -n "$TEST_COMMAND" ]]; then bash -eo pipefail -c "$TEST_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.test' package.json >/dev/null; then "$PM" test
           elif [[ "$STACK" == "python" ]] && [[ -d tests ]]; then python -m pytest
@@ -832,6 +1016,7 @@ jobs:
         shell: bash
         env:
           BUILD_COMMAND_B64: ${{ needs.guard.outputs.build-command-b64 }}
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
           APP_ENV: preview
         run: |
           set -euo pipefail
@@ -862,7 +1047,8 @@ jobs:
       # Release PR is squashed. `overwrite` so a re-run never fails on the name
       # an earlier attempt of the same run used. A re-run does not reuse its own
       # first attempt (GitHub hides that attempt's artifacts from the lookup,
-      # measured 2026-10-14); a later run of the same tree does.
+      # measured 2026-10-14); a later run of the same tree does. The name
+      # says how deep the Check went (Guard, "Name the tree marker").
       - name: Write the tree marker
         if: needs.guard.outputs.tree != ''
         shell: bash
@@ -875,10 +1061,60 @@ jobs:
         if: needs.guard.outputs.tree != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pipeline-checked-tree-${{ needs.guard.outputs.tree }}
+          name: ${{ needs.guard.outputs.marker }}-${{ needs.guard.outputs.tree }}
           path: ${{ runner.temp }}/checked-tree.json
           retention-days: 30
           overwrite: true
+
+      # Fast mode only, after a dispatched or scheduled full Check went green
+      # and its marker is up: the Release PR onto this branch failed as "not
+      # fully verified" and would now pass. Its newest Pipeline run is re-run,
+      # whole, so Guard looks again; nobody has to click. Re-running needs
+      # `actions: write`, which this job does not ask for yet: a called
+      # workflow may not ask for more than its caller grants, and a caller
+      # that still grants `actions: read` would not start at all. Until every
+      # caller grants it and this job asks, the step says which run to re-run
+      # by hand. It never fails the Check.
+      - name: Re-run the Release PR this full Check unblocks
+        id: rerun
+        if: >-
+          needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full'
+          && needs.guard.outputs.tree != ''
+          && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ "${REF_TYPE:-}" != "branch" || -z "${BRANCH:-}" ]]; then echo "Not a branch; no Release PR targets it."; exit 0; fi
+          base=$(jq -rn --arg b "$BRANCH" '$b | @uri')
+          prs=$(gh api "repos/$REPO/pulls?state=open&base=$base&per_page=100" \
+            --jq '.[] | select(.head.ref | startswith("release/")) | [.number, .head.sha, (.head.repo.full_name // "")] | @tsv' 2>/dev/null) || {
+            echo "::notice::Could not list the pull requests into $BRANCH. If a Release PR there failed as not fully verified, re-run all jobs of its Pipeline run."
+            exit 0
+          }
+          if [[ -z "$prs" ]]; then echo "No open Release PR into $BRANCH."; exit 0; fi
+          while IFS=$'\t' read -r number sha head_repo; do
+            [[ "$number" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ && "$head_repo" == "$REPO" ]] || continue
+            by_hand="Re-run all jobs of the Pipeline run of Release PR #$number by hand (not only the failed one)"
+            run=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=20" \
+              --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml")] | first // empty | [.id, (.conclusion // "")] | @tsv' 2>/dev/null </dev/null) || {
+              echo "::notice::The full Check passed, but this job may not read workflow runs. $by_hand."
+              continue
+            }
+            IFS=$'\t' read -r id conclusion <<< "$run"
+            if [[ ! "$id" =~ ^[0-9]+$ ]]; then echo "Release PR #$number has no Pipeline run on ${sha:0:7}."; continue; fi
+            if [[ "$conclusion" != "failure" ]]; then echo "Release PR #$number: run $id is '${conclusion:-still running}', nothing to re-run."; continue; fi
+            if gh api "repos/$REPO/actions/runs/$id/rerun" --method POST >/dev/null 2>&1 </dev/null; then
+              echo "::notice::Re-running run $id of Release PR #$number: $BRANCH has now passed the full Check."
+            else
+              echo "::notice::The full Check passed, but this job may not re-run workflow runs (it needs actions: write from the caller). $by_hand: gh run rerun $id -R $REPO"
+            fi
+          done <<< "$prs"
 
   deploy:
     name: Deploy (${{ matrix.target.name }})

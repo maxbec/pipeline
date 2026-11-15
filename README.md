@@ -33,6 +33,16 @@ that does not answer. That is why the caller grants `actions: read`. A reused
 Check marks its own tree too, so `dev` after the squashed Release PR is reused
 in turn.
 
+**Two depths, for a repository that asks.** With `test.pr_command` set, pull
+requests and pushes run that command (fast), and `test.command` runs only on a
+dispatch, a schedule and a hotfix (full). A Release PR is then green only when
+the tip of its base branch has passed the full Check; until then it is red
+within seconds as "not fully verified". Markers carry the depth
+(`pipeline-fast-tree-<tree sha>` beside the full name above), and a full run
+never stands down for a fast one. Without `test.pr_command` every Check is full,
+as before.
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#two-depths-of-check).
+
 **A promotion reuses the Check of the Release it promotes.** `promote/main` is
 that Release plus the same one commit, with the stable version written over the
 beta. Guard applies the rule above against the promoted Release instead of the
