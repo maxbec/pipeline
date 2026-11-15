@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.5.3-beta.1](https://github.com/maxbec/pipeline/compare/v5.5.2...v5.5.3-beta.1) (2026-11-15)
+
+
+### 🐛 Bug Fixes
+
+* **train:** a repository without main has nothing to release there ([#157](https://github.com/maxbec/pipeline/issues/157)) ([e43f6c0](https://github.com/maxbec/pipeline/commit/e43f6c09978280f7d954a147c0d89fd6f130b5be))
+
 ## [5.5.2](https://github.com/maxbec/pipeline/compare/v5.5.1...v5.5.2) (2026-11-14)
 
 
