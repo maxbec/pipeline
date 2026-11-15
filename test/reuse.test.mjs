@@ -300,7 +300,7 @@ test("fast mode: a Release PR that is more than its base plus a version is check
   }
 })
 
-test("fast mode: a promotion is unchanged and stands on the push run of the Release it promotes", () => {
+test("fast mode: the promotion rule is unchanged and stands on the push run of the Release it promotes", () => {
   const stable = { filename: "package.json", status: "modified", patch: patch([['  "version": "0.35.0-beta.1",', '  "version": "0.35.0",']]) }
   const r = promotion({ compare: releaseCompare([stable, changelog]), env: { FAST_MODE: "true" } })
   assert.equal(r.outputs.reuse, "true")
@@ -310,7 +310,7 @@ test("fast mode: a promotion is unchanged and stands on the push run of the Rele
   assert.ok(!r.calls.some((c) => c.includes("actions/artifacts")), "no marker is asked for")
   const never = promotion({ runs: [], env: { FAST_MODE: "true" } })
   assert.equal(never.outputs.reuse, "false")
-  assert.equal(never.outputs.unverified, undefined, "a promotion is checked, never unverified")
+  assert.equal(never.outputs.unverified, undefined, "a promotion is checked (in full: Guard's depth step), never unverified")
 })
 
 test("without test.pr_command a Release PR stands on its base's green push run, exactly as before", () => {

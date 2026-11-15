@@ -76,8 +76,16 @@ release: # optional; read by the Train workflow, validated by Guard
 |---|---|---|
 | Guard | everything above; on pull requests also the PR title and branches | ubuntu-slim (one core, GitHub-hosted) |
 | Check | `security`, `lint`, `test`, `build`, `runtime`, `stack` | `runner.labels`; ubuntu-slim when it only reports an earlier result or "not fully verified" |
+| Recheck Release PR | nothing but Guard's answers (`test.pr_command` set, depth full) | ubuntu-slim |
 | Deploy | `deploy`, `runtime`, `stack` | `runner.labels` |
-| Train (second workflow) | `release` | `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-latest |
+| Train (second workflow) | `release` | Train, Fix (triage) and Fix (commit): `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-slim. Fix (propose): always ubuntu-latest |
+
+The pipeline has four jobs. Guard runs every time. Check runs on everything but
+a release, Deploy only on a published release. The fourth, **Recheck Release
+PR**, starts only after a green full Check on a `workflow_dispatch` or a
+`schedule` in a repository that sets `test.pr_command`; on a pull request, on a
+push and in every other repository it is skipped, so it starts no runner and
+costs nothing. What it does is under "Two depths of Check".
 
 ## Two depths of Check
 
@@ -92,7 +100,7 @@ stays the whole suite.
 
 | run | depth | test command |
 |---|---|---|
-| pull request, any head but `hotfix/*` and `release/*` | fast | `test.pr_command` |
+| pull request, any head but `hotfix/*`, `release/*` and `promote/*` | fast | `test.pr_command` |
 | push to `dev` / `main` | fast | `test.pr_command` |
 | pull request from `hotfix/*` | full | `test.command` |
 | `workflow_dispatch`, `schedule` | full | `test.command` |
@@ -101,7 +109,9 @@ stays the whole suite.
 
 So **a Release PR is green only when the tip of its base branch has passed the
 full Check.** A Release PR that is more than its base tip plus a version (a
-commit by hand, a base that moved on) is checked itself, in full.
+commit by hand, a base that moved on) is checked itself, in full. So is a
+promotion that cannot stand on the Release it promotes, because the base has
+commits of its own: what goes to production never goes green on the fast suite.
 
 **`PIPELINE_DEPTH`** is `fast` or `full` in the environment of the Lint, Test
 and Build steps, for the repository's own scripts (a build that skips an
@@ -114,31 +124,39 @@ depth: `pipeline-checked-tree-<tree>` after a full Check,
 `pipeline-fast-tree-<tree>` after a fast one. The first is the only name
 there was before, so older markers count as full. A full run stands down only
 for a full marker, a fast run for either. A Release PR that stood on its
-base's full marker leaves the fast name for its own tree.
+base's full marker leaves the fast name for its own tree, and so does a
+promotion that stood on the Release it promotes.
 
-**Starting a full run.** Once the caller listens for it (`workflow_dispatch`,
-and a nightly `schedule` in a repository with a `pr_command`):
+**Starting a full run.** The caller listens for `workflow_dispatch`, and where
+`test.pr_command` is set also for a nightly `schedule` (`23 2 * * *`, on the
+default branch):
 
 ```sh
 gh workflow run ci.yaml --ref dev -R <owner>/<repo>
 ```
 
 It runs the full Check on the tip of that branch, or takes seconds when that
-tree already carries a full marker. When it is green, the Release PR onto the
-branch passes on its next run.
+tree already carries a full marker. When it is green, the job **Recheck
+Release PR** looks for the open Release PR onto that branch (a `release/*`
+head from this repository) and, if the newest Pipeline run of its head
+concluded `failure`, re-runs all jobs of that run, so Guard answers again and
+the Release PR turns green without anyone clicking. The job runs on
+ubuntu-slim with `actions: write` and `pull-requests: read`, checks nothing
+out and never fails the run: an API that refuses is a notice that names the
+run to re-run by hand. It is a job of its own because Check runs the
+repository's code and must not hold `actions: write`. The caller has to grant
+`actions: write` for it (the rendered caller does): a called workflow may not
+ask for more than its caller grants, and one that does fails to start.
 
 **A red Release PR, "Not fully verified".** The tip of the base branch has no
 full marker yet: nobody ran the full Check on it since the last merge, or the
 nightly run has not come round. The Check fails within seconds, on the
 one-core runner, without running anything, and its error names the command
-above. Run it, then re-run **all jobs** of the Release PR's Pipeline run:
+above. Run it; once it is green, Recheck Release PR re-runs the Release PR's
+Pipeline run. By hand, re-run **all jobs** of that run (`gh run rerun <id>`):
 re-running only the failed Check repeats Guard's old answer. The same error
 with "the … API did not answer" means Guard could not look; re-running all
-jobs is enough. A green full run on a dispatch or a schedule looks for the open
-Release PR onto its branch and re-runs its failed Pipeline run by itself. That
-needs `actions: write`, which Check does not ask its caller for yet (a caller
-that still grants `actions: read` would not start at all); until it does, the
-step prints the run to re-run: `gh run rerun <id>`.
+jobs is enough.
 
 ## `release:`
 
@@ -197,7 +215,7 @@ runs two steps over the whole repository — the event is only a poke:
 |---|---|
 | `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. A red pull request run starts the Fix, below; cancelled and release runs start nothing |
 | `workflow_dispatch` | after resolving review threads or removing a label without a push: `gh workflow run train.yaml` |
-| `schedule`, every 30 minutes | what no event reports. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
+| `schedule`, four times a day (`17 */6 * * *`) | what no event reports: every finished Pipeline run starts the train already. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
 
 There is deliberately no `pull_request` trigger: it would run the pull
 request's own copy of the caller with the secrets. All three triggers above run
@@ -220,8 +238,8 @@ Controls:
   caller can be rolled out first. **`CLAUDE_CODE_OAUTH_TOKEN`** belongs to the
   Fix, below.
 
-The train runs on `vars.PIPELINE_RUNNER` in a private repository and always
-GitHub-hosted in a public one.
+The train runs on `vars.PIPELINE_RUNNER` in a private repository that sets
+it; otherwise, and always in a public one, on GitHub's one-core `ubuntu-slim`.
 
 ### Fix
 
@@ -234,9 +252,13 @@ schedule, and not for a cancelled or timed-out run.
    fork, a draft, a head that has moved on since the run, a `release/*`,
    `promote/*`, `backmerge/*` or `hotfix/*` head, a Dependabot pull request,
    one labelled `hold` or `needs-human`, or a run whose failed job is Guard
-   (a wrong title or target is not something to patch). On the run's first
-   attempt it reruns the failed jobs once and stops.
-2. **Fix (propose)**, when the check is still red: Claude Code runs headless
+   (a wrong title or target is not something to patch). For the four head
+   prefixes the job does not start at all. On the run's first attempt it
+   reruns the failed jobs once and stops, unless the step of Check that
+   failed is `Lint`, `Lint (trunk)`, `Test` or `Build`: the same commit fails
+   those the same way, so they go to the proposal at once.
+2. **Fix (propose)**, when the check is still red after its rerun or failed
+   in one of those four steps: Claude Code runs headless
    on a checkout of the pull request's head, with the end of the failed job's
    log (300 lines, 40 KB at most). It can read, search and edit files in that
    checkout and nothing else: no shell, no network tool, no MCP server, and
@@ -280,7 +302,7 @@ ever weakened or switched off to get a pull request green.
 **`CLAUDE_CODE_OAUTH_TOKEN`**, a token from `claude setup-token`. The App needs
 `actions: write` (the rerun), `contents: write` (the commit) and
 `pull requests: write` and `issues: write` (comment and label). Without the
-Claude token a red check still gets its one rerun and nothing more. Do not set
+Claude token a red check gets at most its one rerun and nothing more. Do not set
 an `ANTHROPIC_API_KEY` for this workflow: Claude Code would use it instead.
 
 The token is tied to the Claude subscription of whoever created it. Every

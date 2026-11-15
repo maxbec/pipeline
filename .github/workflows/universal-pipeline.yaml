@@ -1,5 +1,6 @@
 ---
-# The universal pipeline, slim (Flaiky Phase 10, D34 / D42). Three jobs:
+# The universal pipeline, slim (Flaiky Phase 10, D34 / D42). Three jobs, and
+# a fourth that most runs never start:
 #
 #   Guard   parses .github/pipeline.yaml (v3) once for the other two jobs and,
 #           on a pull request, enforces the branch rules and a conventional
@@ -11,6 +12,11 @@
 #   Deploy  only on a published GitHub release (ADR 0004): a prerelease deploys
 #           `preview`, a stable release deploys `production`, via OIDC. Pushes
 #           to dev or main never deploy. Flaiky publishes the release.
+#
+#   Recheck Release PR
+#           only after a green full Check on a dispatch or a schedule, in a
+#           repository that sets test.pr_command: re-runs the Pipeline run of
+#           the Release PR that waited for that Check. Skipped everywhere else.
 #
 # Callers pin this file by SHA and forward their secrets explicitly — org
 # secrets do not cross the owner boundary. Behaviour is configured only through
@@ -373,10 +379,12 @@ jobs:
       # Fast runs lint, the pr_command and build: every pull request and every
       # push. Full runs lint, test.command and build: a dispatch and a schedule
       # (how the tip of a branch gets its full Check before a release), a
-      # hotfix (it goes straight into main) and a Release PR that has to be
-      # checked itself because it is more than its base plus a version. Only
-      # the two events named here are fast; anything else is full, and so is
-      # every run of a repository without a pr_command.
+      # hotfix (it goes straight into main), and a Release PR or a promotion
+      # that has to be checked itself: the one is more than its base plus a
+      # version, the other meets commits of its own on the base. Neither may
+      # go green on the fast suite. Only the two events named here are fast;
+      # anything else is full, and so is every run of a repository without a
+      # pr_command.
       - name: How deep does this Check go?
         id: depth
         shell: bash
@@ -392,7 +400,7 @@ jobs:
               push) depth=fast ;;
               pull_request)
                 case "${HEAD_REF:-}" in
-                  hotfix/*|release/*) ;;
+                  hotfix/*|release/*|promote/*) ;;
                   *) depth=fast ;;
                 esac
                 ;;
@@ -540,8 +548,9 @@ jobs:
       # the answer is `unverified`: Check fails at once, names the command
       # that runs the full Check, and runs nothing. That is never a reuse. A
       # Release PR that is more than its base plus a version is checked
-      # itself, in full ("How deep does this Check go?"). The promotion is
-      # unchanged: it stands on the push run of the Release it promotes.
+      # itself, in full ("How deep does this Check go?"). The promotion's
+      # rule is unchanged: it stands on the push run of the Release it
+      # promotes. Where that fails, its own Check is a full one too.
       - name: Is this a Release PR over a green base?
         id: reuse
         if: >-
@@ -721,9 +730,9 @@ jobs:
             echo "gh workflow run ci.yaml --ref $BASE_REF -R $REPO"
             echo '```'
             echo
-            echo "A green full run re-runs this Pipeline run by itself where it may. Otherwise re-run all of its jobs, not only the failed one: Guard has to look again."
+            echo "A green full run re-runs this Pipeline run by itself. By hand, re-run all jobs of it, not only the failed one: Guard has to look again."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::Not fully verified: $NOTE. Run the full Check on $BASE_REF with: gh workflow run ci.yaml --ref $BASE_REF -R $REPO — then re-run all jobs of this run (a green full run does that by itself where it may)."
+          echo "::error::Not fully verified: $NOTE. Run the full Check on $BASE_REF with: gh workflow run ci.yaml --ref $BASE_REF -R $REPO — a green full run re-runs this run by itself; by hand, re-run all jobs of it, not only the failed one."
           exit 1
 
       - name: Reuse an earlier Check
@@ -1066,21 +1075,35 @@ jobs:
           retention-days: 30
           overwrite: true
 
-      # Fast mode only, after a dispatched or scheduled full Check went green
-      # and its marker is up: the Release PR onto this branch failed as "not
-      # fully verified" and would now pass. Its newest Pipeline run is re-run,
-      # whole, so Guard looks again; nobody has to click. Re-running needs
-      # `actions: write`, which this job does not ask for yet: a called
-      # workflow may not ask for more than its caller grants, and a caller
-      # that still grants `actions: read` would not start at all. Until every
-      # caller grants it and this job asks, the step says which run to re-run
-      # by hand. It never fails the Check.
+  # Fast mode only, after a dispatched or scheduled full Check went green and
+  # its marker is up: the Release PR onto this branch failed as "not fully
+  # verified" and would now pass. This job re-runs that Pipeline run, whole,
+  # so Guard answers again; nobody has to click. It is a job of its own
+  # because re-running needs `actions: write`, and Check must not hold that:
+  # Check runs the repository's code beside the checkout's token. Here nothing
+  # is checked out and nothing from the repository is executed. The caller
+  # has to grant `actions: write` (the rendered caller does); a called
+  # workflow may not ask for more than its caller grants. The job-level `if`
+  # keeps it from starting at all on a pull request, on a push and in a
+  # repository without test.pr_command, so no runner is billed there. It never
+  # fails the workflow: whatever goes wrong is a notice.
+  recheck:
+    name: Recheck Release PR
+    needs: [guard, check]
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      && needs.check.result == 'success'
+      && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full'
+      && needs.guard.outputs.tree != ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write # re-run the Release PR's Pipeline run
+      pull-requests: read # find the Release PR onto this branch
+    steps:
       - name: Re-run the Release PR this full Check unblocks
         id: rerun
-        if: >-
-          needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full'
-          && needs.guard.outputs.tree != ''
-          && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
         continue-on-error: true
         shell: bash
         env:
@@ -1103,16 +1126,17 @@ jobs:
             by_hand="Re-run all jobs of the Pipeline run of Release PR #$number by hand (not only the failed one)"
             run=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=20" \
               --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml")] | first // empty | [.id, (.conclusion // "")] | @tsv' 2>/dev/null </dev/null) || {
-              echo "::notice::The full Check passed, but this job may not read workflow runs. $by_hand."
+              echo "::notice::The full Check passed, but the workflow runs of Release PR #$number could not be read. $by_hand."
               continue
             }
             IFS=$'\t' read -r id conclusion <<< "$run"
             if [[ ! "$id" =~ ^[0-9]+$ ]]; then echo "Release PR #$number has no Pipeline run on ${sha:0:7}."; continue; fi
             if [[ "$conclusion" != "failure" ]]; then echo "Release PR #$number: run $id is '${conclusion:-still running}', nothing to re-run."; continue; fi
-            if gh api "repos/$REPO/actions/runs/$id/rerun" --method POST >/dev/null 2>&1 </dev/null; then
+            # All jobs, not only the failed ones: Guard's answer is what has to change.
+            if gh run rerun "$id" -R "$REPO" >/dev/null 2>&1 </dev/null; then
               echo "::notice::Re-running run $id of Release PR #$number: $BRANCH has now passed the full Check."
             else
-              echo "::notice::The full Check passed, but this job may not re-run workflow runs (it needs actions: write from the caller). $by_hand: gh run rerun $id -R $REPO"
+              echo "::notice::The full Check passed, but run $id of Release PR #$number could not be re-run (the caller has to grant actions: write). $by_hand: gh run rerun $id -R $REPO"
             fi
           done <<< "$prs"
 

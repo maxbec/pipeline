@@ -22,7 +22,6 @@ test("the depth table: fast for pull requests and pushes, full where a release d
     [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/x" }, "fast"],
     [{ EVENT_NAME: "pull_request", HEAD_REF: "fix/hotfix/x" }, "fast"], // only a head that starts with hotfix/
     [{ EVENT_NAME: "pull_request", HEAD_REF: "dev" }, "fast"],
-    [{ EVENT_NAME: "pull_request", HEAD_REF: "promote/main" }, "fast"],
     [{ EVENT_NAME: "pull_request", HEAD_REF: "backmerge/v1.2.3" }, "fast"],
     [{ EVENT_NAME: "push" }, "fast"],
     [{ EVENT_NAME: "pull_request", HEAD_REF: "hotfix/login" }, "full"],
@@ -32,6 +31,11 @@ test("the depth table: fast for pull requests and pushes, full where a release d
     // checked itself, and a release never stands on a fast Check.
     [{ EVENT_NAME: "pull_request", HEAD_REF: "release/dev" }, "full"],
     [{ EVENT_NAME: "pull_request", HEAD_REF: "release/main" }, "full"],
+    // So is a promotion whose reuse fails: main has commits of its own, and
+    // what goes to production does not go green on the fast suite.
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "promote/main" }, "full"],
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/promote/main" }, "fast"], // only a head that starts with it
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/release/x" }, "fast"],
   ]
   for (const [env, want] of table) assert.equal(depth({ ...fast, ...env }), want, JSON.stringify(env))
 })
@@ -66,15 +70,15 @@ const marker = (env) => {
 test("the marker is named for the depth: the full name after a full Check, the fast name after a fast one", () => {
   assert.equal(marker({ DEPTH: "full", FAST_MODE: "true", RELEASE_RULE: "" }), "pipeline-checked-tree")
   assert.equal(marker({ DEPTH: "fast", FAST_MODE: "true", RELEASE_RULE: "" }), "pipeline-fast-tree")
-  // A promotion that stood down for the push run of the Release it promotes.
   assert.equal(marker({ DEPTH: "fast", FAST_MODE: "true", RELEASE_RULE: "true" }), "pipeline-fast-tree")
-  // A Release PR that ran the Check itself, or found a full marker of its own tree.
+  // A Release PR or a promotion that ran the Check itself, or found a full marker of its own tree.
   assert.equal(marker({ DEPTH: "full", FAST_MODE: "true", RELEASE_RULE: "false" }), "pipeline-checked-tree")
 })
 
-test("a Release PR that stood on its base's full marker leaves the fast name for its own tree", () => {
-  // Its tree is the base's plus a version. Guard checks that anew every time;
-  // a full marker would let a later run take it on trust.
+test("a Release PR or a promotion that stood on another commit's Check leaves the fast name for its own tree", () => {
+  // Its tree is that commit's plus a version. Guard checks that anew every
+  // time; a full marker would let a later run take it on trust. For a
+  // promotion the other commit's Check is a push run, which is a fast one.
   assert.equal(marker({ DEPTH: "full", FAST_MODE: "true", RELEASE_RULE: "true" }), "pipeline-fast-tree")
 })
 
@@ -143,11 +147,11 @@ test("an unverified Release PR fails at once and names the command that runs the
   assert.match(readFileSync(summary, "utf8"), /gh workflow run ci\.yaml --ref dev -R o\/r/)
 })
 
-// --- Check: after a green full run, the Release PR is re-run ---------------
+// --- Recheck Release PR: after a green full run, the Release PR is re-run ----
 
 const SHA = "a".repeat(40)
 // A fake `gh` for the three calls the step makes: the open pull requests into
-// the branch, the newest runs of a head, and the re-run itself.
+// the branch, the newest runs of a head, and the re-run itself (`gh run rerun`).
 function fakeGh({ pulls = [], runs = [], fail = [] }) {
   const dir = scratch("gh-")
   writeFileSync(join(dir, "pulls.json"), JSON.stringify(pulls))
@@ -158,9 +162,9 @@ function fakeGh({ pulls = [], runs = [], fail = [] }) {
     `#!/usr/bin/env bash
 path="$2"
 echo "$*" >> "${dir}/calls"
+if [[ "$1 $2" == "run rerun" ]]; then ${failing("rerun")}; exit 0; fi
 case "$path" in
   */pulls\\?*) ${failing("pulls")}; jq -r "$4" "${dir}/pulls.json" ;;
-  */actions/runs/*/rerun) ${failing("rerun")} ;;
   */actions/runs\\?*) ${failing("runs")}; jq -r "$4" "${dir}/runs.json" ;;
   *) echo "unexpected gh api $path" >&2; exit 2 ;;
 esac
@@ -174,7 +178,7 @@ const prRun = (id, conclusion, path = ".github/workflows/ci.yaml") => ({ id, con
 
 function rerun(gh, env = {}) {
   const dir = fakeGh(gh)
-  const r = runStep("check", "rerun", {
+  const r = runStep("recheck", "rerun", {
     PATH: `${dir}:${process.env.PATH}`,
     GH_TOKEN: "t",
     REPO: "o/r",
@@ -182,15 +186,15 @@ function rerun(gh, env = {}) {
     REF_TYPE: "branch",
     ...env,
   })
-  assert.equal(r.status, 0, `the step never fails the Check: ${r.stdout}${r.stderr}`)
+  assert.equal(r.status, 0, `the step never fails the workflow: ${r.stdout}${r.stderr}`)
   r.calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : []
-  r.reran = r.calls.filter((c) => c.includes("/rerun"))
+  r.reran = r.calls.filter((c) => c.startsWith("run rerun"))
   return r
 }
 
 test("a green full run re-runs the failed Pipeline run of the Release PR onto its branch", () => {
   const r = rerun({ pulls: [releasePr()], runs: [prRun(77, "failure"), prRun(70, "failure")] })
-  assert.deepEqual(r.reran, ["api repos/o/r/actions/runs/77/rerun --method POST"], "the newest run, whole: Guard has to look again")
+  assert.deepEqual(r.reran, ["run rerun 77 -R o/r"], "the newest run, all its jobs and never --failed: Guard has to answer again")
   assert.match(r.stdout, /::notice::Re-running run 77 of Release PR #12: dev has now passed the full Check\./)
   assert.ok(r.calls[0].startsWith("api repos/o/r/pulls?state=open&base=dev&per_page=100"), "only pull requests into this branch")
   assert.ok(r.calls[1].startsWith(`api repos/o/r/actions/runs?head_sha=${SHA}&event=pull_request&per_page=20`))
@@ -222,11 +226,12 @@ test("every Release PR onto the branch is looked at", () => {
   assert.ok(r.calls.some((c) => c.includes(`head_sha=${other}`)))
 })
 
-test("a token that may not re-run, read runs or list pull requests ends in a notice, never a red Check", () => {
+test("an API that refuses the re-run, the runs or the pull requests ends in a notice, never a red run", () => {
   const noWrite = rerun({ pulls: [releasePr()], runs: [prRun(77, "failure")], fail: ["rerun"] })
-  assert.match(noWrite.stdout, /::notice::.*needs actions: write from the caller.*Release PR #12.*gh run rerun 77 -R o\/r/)
+  assert.match(noWrite.stdout, /::notice::.*run 77 of Release PR #12 could not be re-run.*gh run rerun 77 -R o\/r/)
+  assert.ok(!/::error::/.test(noWrite.stdout))
   const noRead = rerun({ pulls: [releasePr()], runs: [prRun(77, "failure")], fail: ["runs"] })
-  assert.match(noRead.stdout, /::notice::.*may not read workflow runs.*Release PR #12/)
+  assert.match(noRead.stdout, /::notice::.*workflow runs of Release PR #12 could not be read/)
   assert.deepEqual(noRead.reran, [])
   const noPulls = rerun({ pulls: [releasePr()], fail: ["pulls"] })
   assert.match(noPulls.stdout, /::notice::Could not list the pull requests into dev/)

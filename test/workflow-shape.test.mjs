@@ -6,12 +6,13 @@ import { ROOT, runStep, scratch, WORKFLOW, yaml } from "./helpers.mjs"
 
 const wf = () => yaml(WORKFLOW)
 
-test("the universal pipeline is exactly Guard, Check and Deploy", () => {
+test("the universal pipeline is Guard, Check and Deploy, plus the recheck that most runs never start", () => {
   const doc = wf()
   assert.ok(doc.on.workflow_call, "reusable workflow")
-  assert.deepEqual(Object.keys(doc.jobs), ["guard", "check", "deploy"])
+  assert.deepEqual(Object.keys(doc.jobs), ["guard", "check", "recheck", "deploy"])
   assert.equal(doc.jobs.guard.name, "Guard")
   assert.equal(doc.jobs.check.name, "Check")
+  assert.equal(doc.jobs.recheck.name, "Recheck Release PR")
   assert.match(String(doc.jobs.deploy.name), /^Deploy/)
 })
 
@@ -177,7 +178,6 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   // tree is the green base tip plus the version and the changelog. A step that
   // forgot the gate would run on the runner with no checkout or no toolchain
   // and turn the check red. Only the marker runs either way: it needs neither.
-  // (The step after the marker is fast mode's and is gated on its own.)
   const doc = yaml(WORKFLOW)
   const check = doc.jobs.check
   assert.equal(check.env.REUSE, "${{ needs.guard.outputs.reuse }}")
@@ -195,8 +195,6 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   assert.equal(unverified.name, "Not fully verified")
   assert.equal(notice.if, "env.REUSE == 'true'")
   assert.match(notice.env.NOTE, /needs\.guard\.outputs\.reuse-note/)
-  const rerun = rest.pop()
-  assert.equal(rerun.id, "rerun")
   const marker = rest.splice(-2)
   assert.deepEqual(marker.map((s) => s.name), ["Write the tree marker", "Mark the checked tree"])
   for (const step of rest) {
@@ -253,7 +251,7 @@ test("the build cache is restored on every Check and saved after Build on a push
 test("a passing Check marks its tree last, under the name Guard looks up", () => {
   const doc = wf()
   const steps = doc.jobs.check.steps
-  const [write, upload] = steps.slice(-3, -1)
+  const [write, upload] = steps.slice(-2)
   assert.equal(doc.jobs.guard.outputs.tree, "${{ steps.tree.outputs.tree }}")
   for (const step of [write, upload]) {
     // No status function: a failed step above skips both, so a marker means every step passed.
@@ -376,18 +374,33 @@ test("an unverified Release PR fails in the first step, so nothing runs and no m
   }
 })
 
-test("the re-run of a Release PR is fast mode's, comes after the marker and can never fail the Check", () => {
-  const check = wf().jobs.check
-  const rerun = check.steps.at(-1)
-  assert.equal(rerun.id, "rerun")
-  assert.equal(check.steps.at(-2).name, "Mark the checked tree", "the marker is up before the Release PR looks for it")
+test("the recheck starts only after a green full Check on a dispatch or a schedule in fast mode", () => {
+  // Job-level, so nothing starts and nothing is billed on a pull request, on
+  // a push, on a release, or in a repository without test.pr_command.
+  const recheck = wf().jobs.recheck
+  assert.deepEqual(recheck.needs, ["guard", "check"], "after Check: the full marker is up before the Release PR looks for it")
   assert.equal(
-    rerun.if,
-    "needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full' && needs.guard.outputs.tree != '' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')",
+    recheck.if,
+    "(github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.check.result == 'success' && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full' && needs.guard.outputs.tree != ''",
   )
+  assert.ok(!/\b(always|failure|cancelled)\(\)/.test(recheck.if), "no status function: a failed or skipped Check skips it")
+  assert.equal(recheck["runs-on"], "ubuntu-slim")
+  assert.equal(recheck["timeout-minutes"], 5)
+  assert.equal(recheck["continue-on-error"], true, "it never fails the workflow")
+  assert.equal(recheck.env, undefined)
+})
+
+test("the recheck re-runs the whole run, executes nothing from the repository and holds no more than it needs", () => {
+  const recheck = wf().jobs.recheck
+  assert.deepEqual(recheck.permissions, { actions: "write", "pull-requests": "read" })
+  assert.equal(recheck.steps.length, 1)
+  const [rerun] = recheck.steps
+  assert.equal(rerun.id, "rerun")
+  assert.equal(rerun.uses, undefined, "no checkout, no action: nothing a pull request controls runs beside this token")
   assert.equal(rerun["continue-on-error"], true)
-  assert.match(rerun.run, /actions\/runs\/\$id\/rerun" --method POST/, "the whole run: Guard has to look again")
-  assert.ok(!/rerun-failed-jobs/.test(rerun.run), "re-running Check alone would repeat Guard's old answer")
+  assert.match(rerun.run, /gh run rerun "\$id" -R "\$REPO"/, "all jobs: Guard has to answer again")
+  assert.ok(!/--failed|rerun-failed-jobs/.test(rerun.run), "re-running Check alone would repeat Guard's old answer")
+  assert.ok(!/::error::|exit [1-9]/.test(rerun.run), "whatever goes wrong is a notice")
   assert.deepEqual(rerun.env, {
     GH_TOKEN: "${{ github.token }}",
     REPO: "${{ github.repository }}",
@@ -396,20 +409,31 @@ test("the re-run of a Release PR is fast mode's, comes after the marker and can 
   })
 })
 
-test("Check asks its caller for no more than it did", () => {
-  // A called workflow may not ask for more than its caller grants: one job
-  // asking for `actions: write` while a caller still grants `actions: read`
-  // and that caller does not start at all (startup_failure, no Check). The
-  // re-run step therefore works only once every caller grants it and this
-  // block asks; until then it names the run to re-run by hand.
-  assert.deepEqual(wf().jobs.check.permissions, { contents: "read", "pull-requests": "read", checks: "write" })
+test("only the recheck asks for actions: write; Check asks its caller for no more than it did", () => {
+  // Check runs the repository's code (install, lint, test, build) beside the
+  // token the checkout persists, so it stays on what it had. A called
+  // workflow may not ask for more than its caller grants: the rendered caller
+  // and this repository's own grant `actions: write` for the recheck.
+  const jobs = wf().jobs
+  assert.deepEqual(jobs.check.permissions, { contents: "read", "pull-requests": "read", checks: "write" })
+  assert.equal(jobs.guard.permissions.actions, "read")
+  const writers = Object.entries(jobs).filter(([, job]) => job.permissions?.actions === "write").map(([id]) => id)
+  assert.deepEqual(writers, ["recheck"])
+  for (const [id, job] of Object.entries(jobs)) assert.ok(job.permissions, `${id} names its permissions`)
+  for (const caller of ["ci.yaml", "examples/caller.yaml"]) {
+    const granted = yaml(join(ROOT, ".github/workflows", caller)).jobs.pipeline.permissions
+    assert.equal(granted.actions, "write", `${caller} grants what the recheck asks for, or the workflow does not start`)
+    assert.equal(granted["pull-requests"], "read", caller)
+  }
+  assert.ok(!jobs.check.steps.some((s) => /rerun/.test(String(s.run ?? ""))), "Check re-runs nothing")
 })
 
 test("no expression is interpolated into a script of the pipeline's depth steps", () => {
   const doc = wf()
   const steps = [
     ...doc.jobs.guard.steps.filter((s) => ["depth", "tree", "reuse", "marker"].includes(s.id)),
-    ...doc.jobs.check.steps.filter((s) => ["unverified", "test", "rerun"].includes(s.id)),
+    ...doc.jobs.check.steps.filter((s) => ["unverified", "test"].includes(s.id)),
+    ...doc.jobs.recheck.steps,
   ]
   assert.equal(steps.length, 7)
   for (const step of steps) {

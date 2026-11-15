@@ -1,13 +1,14 @@
 # Pipeline
 
 The one reusable GitHub Actions workflow every repository in the `navigaite`,
-`edilio-app` and `maxbec` accounts calls. Three jobs, one config file, pinned by
-commit.
+`edilio-app` and `maxbec` accounts calls. Three jobs and a fourth that most
+runs never start, one config file, pinned by commit.
 
 | job | when | what |
 |---|---|---|
 | **Guard** | every run | reads `.github/pipeline.yaml`; on a pull request enforces the branch rules and a conventional title |
-| **Check** | pull requests and pushes to `dev` / `main` | secret scan, dependency review, lint, test, build in one job on the configured runner. `pipeline / Check` is the single required status check |
+| **Check** | pull requests and pushes to `dev` / `main`; a dispatch or a nightly schedule for the full Check | secret scan, dependency review, lint, test, build in one job on the configured runner. `pipeline / Check` is the single required status check |
+| **Recheck Release PR** | after a green full Check on a dispatch or a schedule, only where `test.pr_command` is set | re-runs the Pipeline run of the Release PR that waited for that Check |
 | **Deploy** | a **published release** only | prerelease → `preview`, stable → `production`; Vercel, Cloudflare Workers, Docker to GHCR (plus an optional Render hook), npm |
 
 **A tree that passed once is not checked again.** A Check reads nothing but
@@ -29,7 +30,9 @@ changed line outside the changelog only swaps a version for the one the title
 `chore(release): X` names, and the base tip's own push run is green. It then
 reports that run's result on a hosted runner in seconds and leaves the
 configured runner free. Anything else runs the full Check, and so does an API
-that does not answer. That is why the caller grants `actions: read`. A reused
+that does not answer. Guard reads runs and markers for this with
+`actions: read`; the caller grants `actions: write`, which only Recheck
+Release PR uses. A reused
 Check marks its own tree too, so `dev` after the squashed Release PR is reused
 in turn.
 
@@ -39,8 +42,9 @@ dispatch, a schedule and a hotfix (full). A Release PR is then green only when
 the tip of its base branch has passed the full Check; until then it is red
 within seconds as "not fully verified". Markers carry the depth
 (`pipeline-fast-tree-<tree sha>` beside the full name above), and a full run
-never stands down for a fast one. Without `test.pr_command` every Check is full,
-as before.
+never stands down for a fast one. A promotion that cannot reuse its Release is
+checked in full as well. Without `test.pr_command` every Check is full, as
+before.
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#two-depths-of-check).
 
 **A promotion reuses the Check of the Release it promotes.** `promote/main` is
