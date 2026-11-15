@@ -79,6 +79,7 @@ jobs:
       pnpm-version: ${{ steps.config.outputs.pnpm-version }}
       cache: ${{ steps.config.outputs.cache }}
       dependency-cache: ${{ steps.config.outputs.dependency-cache }}
+      build-cache: ${{ steps.config.outputs.build-cache }}
       python-version: ${{ steps.config.outputs.python-version }}
       runner: ${{ steps.config.outputs.runner }}
       security: ${{ steps.config.outputs.security }}
@@ -256,6 +257,20 @@ jobs:
           if [[ "$DEPENDENCY_CACHE" == "false" ]]; then CACHE=""; fi
           out cache "$CACHE"
           out dependency-cache "$DEPENDENCY_CACHE"
+          # runtime.build_cache: one directory (PIPELINE_BUILD_CACHE_DIR) that a
+          # task runner such as turbo keeps its results in, restored on every
+          # Check and saved by pushes only. What goes in it, and proving that a
+          # replayed result is safe, is the repository's business. It follows
+          # the dependency cache: a runner whose disk outlives the job keeps its
+          # own.
+          BUILD_CACHE=$(yq -r '.runtime.build_cache' "$CONFIG_FILE")
+          case "$BUILD_CACHE" in
+            null) BUILD_CACHE=false ;;
+            true|false) ;;
+            *) echo "::error::$CONFIG_FILE: .runtime.build_cache must be true or false, got '$BUILD_CACHE'."; exit 1 ;;
+          esac
+          if [[ "$DEPENDENCY_CACHE" == "false" ]]; then BUILD_CACHE=false; fi
+          out build-cache "$BUILD_CACHE"
           # pnpm/action-setup reads a pin from devEngines.packageManager first, then packageManager;
           # ask for the latest pnpm only when the manifest pins neither.
           PNPM_VERSION=""
@@ -307,8 +322,14 @@ jobs:
           # `gha` with mode=max sends every intermediate layer through the
           # runner's uplink (edilio 2026-08-24: 438 s of a 634 s build; still
           # 913 s for one image on 2026-11-13), `local` keeps it on the runner's
-          # work volume. A repository can still name either.
-          DOCKER_CACHE_DEFAULT=gha
+          # work volume. On a hosted runner the default is none: Deploy runs on
+          # a release event, whose cache scope is the new tag, and the next
+          # release's tag cannot read it. edilio 2026-11-15: 1.7 GB of
+          # buildkit-blob entries under refs/tags/v0.8.0-beta.2, written by the
+          # Deploy and never read again, half the repository's 10 GB cache, and
+          # part of the 485 s the default image took to build and push. A
+          # repository can still name any backend.
+          DOCKER_CACHE_DEFAULT=none
           if jq -e 'index("self-hosted") != null' <<< "$RUNNER" >/dev/null; then DOCKER_CACHE_DEFAULT=local; fi
           DOCKER_CACHE=$(str '.deploy.docker.cache_backend' "$DOCKER_CACHE_DEFAULT")
           case "$DOCKER_CACHE" in
@@ -636,25 +657,52 @@ jobs:
 
       # Node before pnpm: pnpm/action-setup v6 bootstraps pnpm with `npm ci`, taking npm from
       # PATH, and a self-hosted runner's system Node may have none (the homelab images had Node 18
-      # and no npm, 2026-10-11). setup-node's `cache: pnpm` needs pnpm on PATH, so pnpm caches its
-      # own store instead.
+      # and no npm, 2026-10-11). Neither action caches: see "Locate the dependency cache".
       - name: Set up Node.js
         if: env.REUSE != 'true' && env.STACK == 'nodejs'
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
       - name: Set up pnpm (from package.json)
         if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Set up pnpm (latest)
         if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ needs.guard.outputs.pnpm-version }}
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+
+      # The package store is restored on every Check and saved only by a push.
+      # A cache is scoped to the ref that saved it, and a pull request can read
+      # its base branch's entries but no other pull request's, so the built-in
+      # caches of setup-node and pnpm/action-setup (which save on every miss)
+      # stored one copy per pull request: edilio 2026-11-15, 26 entries of
+      # 311 MB, most of them never read again, evicting the base branch's.
+      # Now the base branch holds the one copy every pull request starts from.
+      - name: Locate the dependency cache
+        id: deps
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && needs.guard.outputs.cache != ''
+        shell: bash
+        env:
+          CACHE: ${{ needs.guard.outputs.cache }}
+        run: |
+          set -euo pipefail
+          case "$CACHE" in
+            pnpm) dir=$(pnpm store path --silent); lock=pnpm-lock.yaml ;;
+            npm) dir=$(npm config get cache); lock=package-lock.json ;;
+            yarn) if [[ "$(yarn --version)" == 1.* ]]; then dir=$(yarn cache dir); else dir=$(yarn config get cacheFolder); fi; lock=yarn.lock ;;
+            *) echo "::error::Unknown dependency cache '$CACHE'"; exit 1 ;;
+          esac
+          prefix="deps-$CACHE-$RUNNER_OS-$RUNNER_ARCH-"
+          { echo "path=$dir"; echo "prefix=$prefix"; echo "key=$prefix$(sha256sum "$lock" | cut -c1-64)"; } >> "$GITHUB_OUTPUT"
+      - name: Restore the dependency cache
+        id: deps-restore
+        if: env.REUSE != 'true' && steps.deps.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+          restore-keys: ${{ steps.deps.outputs.prefix }}
       - name: Set up Python
         if: env.REUSE != 'true' && env.STACK == 'python'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -680,6 +728,47 @@ jobs:
               if [[ -f requirements-dev.txt ]]; then pip install -r requirements-dev.txt; fi
               if [[ -f pyproject.toml && ! -f requirements.txt ]]; then pip install -e ".[dev]" 2>/dev/null || pip install -e .; fi ;;
           esac
+      - name: Save the dependency cache
+        if: >-
+          env.REUSE != 'true' && steps.deps.outputs.key != '' && github.event_name == 'push'
+          && steps.deps-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+
+      # runtime.build_cache: a task runner's result cache (turbo's, for one)
+      # that outlives the job. Restored on every Check: a pull request reads the
+      # newest entry its base branch saved. Saved only by a push, once every
+      # step passed, under a new key per run, so the base branch always offers
+      # its latest state and no pull request stores a copy nobody else can read.
+      # The key's lockfile and Node parts make a new lockfile or Node start from
+      # the closest older entry instead of an exact one; the repository's own
+      # hashing decides what is replayed (edilio: scripts/ci-turbo.sh).
+      - name: Name the build cache
+        id: build-cache
+        if: env.REUSE != 'true' && needs.guard.outputs.build-cache == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node=$(node --version 2>/dev/null || echo none)
+          lock=$(cat pnpm-lock.yaml package-lock.json yarn.lock 2>/dev/null | sha256sum | cut -c1-16)
+          base="build-$RUNNER_OS-$RUNNER_ARCH-node-$node-"
+          {
+            echo "path=$HOME/.cache/pipeline-build-cache"
+            echo "key=$base$lock-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            echo "restore-keys<<EOF"; echo "$base$lock-"; echo "$base"; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          mkdir -p "$HOME/.cache/pipeline-build-cache"
+          echo "PIPELINE_BUILD_CACHE_DIR=$HOME/.cache/pipeline-build-cache" >> "$GITHUB_ENV"
+      - name: Restore the build cache
+        id: build-cache-restore
+        if: env.REUSE != 'true' && steps.build-cache.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.build-cache.outputs.path }}
+          key: ${{ steps.build-cache.outputs.key }}
+          restore-keys: ${{ steps.build-cache.outputs.restore-keys }}
 
       - name: Which linter?
         id: linter
@@ -750,6 +839,13 @@ jobs:
           if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build
           else echo "::notice::No build command configured and none detected; skipped."; fi
+      # After every step that may write to it, and only when all of them passed.
+      - name: Save the build cache
+        if: env.REUSE != 'true' && steps.build-cache.outputs.key != '' && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.build-cache.outputs.path }}
+          key: ${{ steps.build-cache.outputs.key }}
       - name: Upload build artifact
         if: env.REUSE != 'true' && needs.guard.outputs.build == 'true' && needs.guard.outputs.artifact-path != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -860,19 +956,41 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
           registry-url: https://registry.npmjs.org
       - name: Set up pnpm (from package.json)
         if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version == ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Set up pnpm (latest)
         if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version != ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ needs.guard.outputs.pnpm-version }}
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+      # Restore only: a release event's cache scope is its tag, which no later
+      # run can read, but it can read the default branch's entry that Check's
+      # pushes save.
+      - name: Locate the dependency cache
+        id: deps
+        if: (env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm') && needs.guard.outputs.cache != ''
+        shell: bash
+        env:
+          CACHE: ${{ needs.guard.outputs.cache }}
+        run: |
+          set -euo pipefail
+          case "$CACHE" in
+            pnpm) dir=$(pnpm store path --silent); lock=pnpm-lock.yaml ;;
+            npm) dir=$(npm config get cache); lock=package-lock.json ;;
+            yarn) if [[ "$(yarn --version)" == 1.* ]]; then dir=$(yarn cache dir); else dir=$(yarn config get cacheFolder); fi; lock=yarn.lock ;;
+            *) echo "::error::Unknown dependency cache '$CACHE'"; exit 1 ;;
+          esac
+          prefix="deps-$CACHE-$RUNNER_OS-$RUNNER_ARCH-"
+          { echo "path=$dir"; echo "prefix=$prefix"; echo "key=$prefix$(sha256sum "$lock" | cut -c1-64)"; } >> "$GITHUB_OUTPUT"
+      - name: Restore the dependency cache
+        if: steps.deps.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+          restore-keys: ${{ steps.deps.outputs.prefix }}
       - name: Install dependencies
         if: env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm'
         shell: bash

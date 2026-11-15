@@ -200,10 +200,10 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   }
 })
 
-test("Node is set up before pnpm, and pnpm caches its own store", () => {
+test("Node is set up before pnpm, and the dependency cache is saved by pushes only", () => {
   // pnpm/action-setup v6 bootstraps pnpm with `npm ci`, taking npm from PATH. The homelab
-  // runner images carried Node 18 and no npm (2026-10-11), so setup-node has to come first,
-  // and its `cache: pnpm` (which needs pnpm on PATH) gives way to the action's own `cache`.
+  // runner images carried Node 18 and no npm (2026-10-11), so setup-node has to come first.
+  // Neither action caches: both save on every miss, one copy per pull request ref.
   for (const job of ["check", "deploy"]) {
     const steps = wf().jobs[job].steps
     const node = steps.findIndex((s) => String(s.uses ?? "").startsWith("actions/setup-node@"))
@@ -213,17 +213,33 @@ test("Node is set up before pnpm, and pnpm caches its own store", () => {
       assert.ok(node < i, `${job}: "${steps[i].name}" runs before setup-node`)
       assert.match(steps[i].uses, /@[0-9a-f]{40}$/, `${job}: SHA-pinned`)
       assert.match(readFileSync(WORKFLOW, "utf8"), new RegExp(`${steps[i].uses} # v6\\.\\d+\\.\\d+\\n`), "a v6 release")
-      assert.equal(steps[i].with.cache, "${{ needs.guard.outputs.cache == 'pnpm' }}")
+      assert.equal(steps[i].with?.cache, undefined, `${job}: pnpm/action-setup does not cache`)
     }
     const [pinned, latest] = pnpm.map((i) => steps[i])
-    assert.equal(pinned.with.version, undefined, `${job}: version next to packageManager throws`)
+    assert.equal(pinned.with?.version, undefined, `${job}: version next to packageManager throws`)
     assert.equal(latest.with.version, "${{ needs.guard.outputs.pnpm-version }}")
-    assert.equal(
-      steps[node].with.cache,
-      "${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}",
-      `${job}: setup-node caches npm and yarn only`,
-    )
+    assert.equal(steps[node].with.cache, undefined, `${job}: setup-node does not cache`)
+    const restore = steps.filter((s) => String(s.uses ?? "").startsWith("actions/cache/restore@"))
+    assert.ok(restore.some((s) => s.with.key === "${{ steps.deps.outputs.key }}"), `${job}: restores the dependency cache`)
   }
+  const saves = (job) => wf().jobs[job].steps.filter((s) => /^actions\/cache(\/save)?@/.test(String(s.uses ?? "")))
+  assert.deepEqual(saves("deploy"), [], "a release's cache scope is its tag, which nothing reads again")
+  assert.equal(saves("check").length, 2, "the dependency cache and the build cache")
+  for (const step of saves("check")) {
+    assert.match(step.uses, /^actions\/cache\/save@[0-9a-f]{40}$/)
+    assert.match(String(step.if), /github\.event_name == 'push'/, `"${step.name}" saves on a push only`)
+  }
+})
+
+test("the build cache is restored on every Check and saved after Build on a push", () => {
+  const steps = wf().jobs.check.steps
+  const at = (name) => steps.findIndex((s) => s.name === name)
+  assert.ok(at("Name the build cache") < at("Restore the build cache"))
+  assert.ok(at("Restore the build cache") < at("Test"), "restored before any task runs")
+  assert.ok(at("Build") < at("Save the build cache"), "saved after the last step that writes to it")
+  assert.equal(steps[at("Name the build cache")].if, "env.REUSE != 'true' && needs.guard.outputs.build-cache == 'true'")
+  assert.equal(steps[at("Save the build cache")].with.key, "${{ steps.build-cache.outputs.key }}")
+  assert.match(steps[at("Name the build cache")].run, /PIPELINE_BUILD_CACHE_DIR=/)
 })
 
 test("a passing Check marks its tree last, under the name Guard looks up", () => {
@@ -286,7 +302,8 @@ test("the train runs on a dispatch, a schedule and a green Pipeline run of a pul
   assert.match(cond, /github\.event_name == 'schedule'/)
   assert.match(
     cond,
-    /\(github\.event_name == 'workflow_run' && github\.event\.workflow_run\.conclusion == 'success' && \(github\.event\.workflow_run\.event == 'pull_request' \|\| github\.event\.workflow_run\.event == 'push'\)\)/,
+    /\(github\.event_name == 'workflow_run' && github\.event\.workflow_run\.conclusion == 'success' && \(github\.event\.workflow_run\.event == 'push' \|\| \(github\.event\.workflow_run\.event == 'pull_request' && !startsWith\(github\.event\.workflow_run\.head_branch, 'release\/'\) && !startsWith\(github\.event\.workflow_run\.head_branch, 'promote\/'\)\)\)\)/,
+    "a green Release PR or Promotion run starts no runner: the train never merges those",
   )
   assert.doesNotMatch(cond, /'release'|failure|cancelled|always\(\)/, "a deploy run or a red one starts nothing here")
 })

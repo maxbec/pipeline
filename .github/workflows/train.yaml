@@ -52,12 +52,19 @@ jobs:
     # only when it is green and came from a pull request or a push: a release
     # run is a deploy, and a red or cancelled run has nothing to merge.
     # A red pull request run is the Fix jobs' below.
+    # A green run of a Release PR or a Promotion (`release/*`, `promote/*`)
+    # starts no runner either: the train never merges those, and what follows
+    # Max's merge of one arrives as the push run of its base. Every Train run
+    # bills at least a minute; on edilio 2026-11-15 these were 11 of 70.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push'))
+      (github.event.workflow_run.event == 'push' ||
+      (github.event.workflow_run.event == 'pull_request' &&
+      !startsWith(github.event.workflow_run.head_branch, 'release/') &&
+      !startsWith(github.event.workflow_run.head_branch, 'promote/'))))
     # A public repository always runs GitHub-hosted: its runs can be started by
     # anyone's pull request. A private one uses the caller's PIPELINE_RUNNER
     # variable (a JSON array of labels) when set. An event without
