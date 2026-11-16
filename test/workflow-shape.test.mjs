@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -246,6 +247,46 @@ test("the build cache is restored on every Check and saved after Build on a push
   assert.equal(steps[at("Name the build cache")].if, "env.REUSE != 'true' && needs.guard.outputs.build-cache == 'true'")
   assert.equal(steps[at("Save the build cache")].with.key, "${{ steps.build-cache.outputs.key }}")
   assert.match(steps[at("Name the build cache")].run, /PIPELINE_BUILD_CACHE_DIR=/)
+})
+
+// The step runs under `bash -e -o pipefail`, and no repository has all three
+// lockfiles: `cat` on a missing one must not end the step (edilio's first Check
+// on v5.6.0-beta.1, run 43777715746, died here with exit 2).
+test("the build cache gets a name whichever lockfiles the repository has", () => {
+  const name = (files) => {
+    const dir = scratch()
+    for (const [file, content] of Object.entries(files)) writeFileSync(join(dir, file), content)
+    const env = join(dir, "env")
+    writeFileSync(env, "")
+    const script = join(dir, "name.sh")
+    writeFileSync(script, wf().jobs.check.steps.find((s) => s.id === "build-cache").run)
+    const res = spawnSync("bash", ["--noprofile", "--norc", "-e", "-o", "pipefail", script], {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: dir,
+        GITHUB_OUTPUT: join(dir, "output"),
+        GITHUB_ENV: env,
+        RUNNER_OS: "Linux",
+        RUNNER_ARCH: "X64",
+        GITHUB_RUN_ID: "1",
+        GITHUB_RUN_ATTEMPT: "1",
+      },
+    })
+    assert.equal(res.status, 0, `${Object.keys(files).join(", ") || "no lockfile"}: ${res.stderr}`)
+    const key = /^key=(.+)$/m.exec(readFileSync(join(dir, "output"), "utf8"))?.[1]
+    assert.match(key ?? "", /^build-Linux-X64-node-\S+-[0-9a-f]{16}-1-1$/)
+    assert.match(readFileSync(env, "utf8"), /^PIPELINE_BUILD_CACHE_DIR=.+\/\.cache\/pipeline-build-cache$/m)
+    return key
+  }
+  const pnpm = name({ "pnpm-lock.yaml": "lockfileVersion: '9.0'\n" })
+  const npm = name({ "package-lock.json": "{}\n" })
+  const none = name({})
+  assert.equal(pnpm, name({ "pnpm-lock.yaml": "lockfileVersion: '9.0'\n" }), "the same lockfile gives the same key")
+  assert.notEqual(pnpm, name({ "pnpm-lock.yaml": "lockfileVersion: '9.1'\n" }), "a new lockfile gives a new key")
+  assert.notEqual(pnpm, npm)
+  assert.notEqual(pnpm, none)
 })
 
 test("a passing Check marks its tree last, under the name Guard looks up", () => {

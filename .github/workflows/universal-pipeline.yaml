@@ -932,7 +932,9 @@ jobs:
         run: |
           set -euo pipefail
           node=$(node --version 2>/dev/null || echo none)
-          lock=$(cat pnpm-lock.yaml package-lock.json yarn.lock 2>/dev/null | sha256sum | cut -c1-16)
+          # No repository has all three: under pipefail a missing one must not
+          # end the step.
+          lock=$({ cat pnpm-lock.yaml package-lock.json yarn.lock 2>/dev/null || true; } | sha256sum | cut -c1-16)
           base="build-$RUNNER_OS-$RUNNER_ARCH-node-$node-"
           {
             echo "path=$HOME/.cache/pipeline-build-cache"
