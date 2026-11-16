@@ -10,6 +10,7 @@ lint:
   enable: false
 test:
   command: npm test
+  pr_command: npm test
 build:
   enable: false
 deploy:
