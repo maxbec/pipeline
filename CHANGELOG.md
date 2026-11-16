@@ -1,3 +1,4 @@
+<!-- rehearsal of the Release PR rule; this branch is never merged -->
 # Changelog
 
 ## [5.6.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.1...v5.6.0-beta.2) (2026-11-16)
