@@ -136,7 +136,10 @@ gh workflow run ci.yaml --ref dev -R <owner>/<repo>
 ```
 
 It runs the full Check on the tip of that branch, or takes seconds when that
-tree already carries a full marker. When it is green, the job **Recheck
+tree already carries a full marker. Lint is the one step that is no wider
+there: where Trunk lints, such a run checks what the tip commit brought, the
+range its push Check linted, and never the whole repository (the Trunk
+action's `all` mode would fail on every issue older than Trunk). When it is green, the job **Recheck
 Release PR** looks for the open Release PR onto that branch (a `release/*`
 head from this repository) and, if the newest Pipeline run of its head
 concluded `failure`, re-runs all jobs of that run, so Guard answers again and
