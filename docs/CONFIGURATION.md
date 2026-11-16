@@ -280,8 +280,11 @@ A beta whose Check is green, still running, being rerun or only skipped (the
 release event's run) is not superseded, and the first rule holds. A rerun
 that turns the old beta green after all makes it promotable again; a
 replacement Release PR already open on `dev` then stays open and is the
-owner's to merge or close. `release_as` remains the way to force a version by
-hand.
+owner's to merge or close.
+
+`release_as` is no way around a red beta on `dev`: Guard admits only a stable
+`X.Y.Z` there, and in a repository that has `dev` the train gives a stable
+override to `main` alone.
 
 ### Fix
 

@@ -214,10 +214,11 @@ export async function planRelease(
   })
   // Unless the last beta is dead: a beta whose own Check failed is never
   // promoted, and the commits after it are usually the `chore(ci)` that
-  // repairs the Check. Without this they released nothing, and the cycle
-  // stood still until a person set "release as" (a 0.9.0-beta.1 cut under a
-  // broken pipeline pin, 2026-11-16). The replacement is the next beta of the
-  // same cycle: the dead beta's target is a floor, as an open Release PR's is.
+  // repairs the Check. Without this they released nothing and the cycle
+  // stood still, with no setting to move it: `release_as` in the config is
+  // stable only and goes to main (a 0.9.0-beta.1 cut under a broken pipeline
+  // pin, 2026-11-16). The replacement is the next beta of the same cycle:
+  // the dead beta's target is a floor, as an open Release PR's is.
   const superseded = opts.supersedes ? parseVersion(opts.supersedes) : null
   const replaces = superseded !== null && history.commitsSinceRelease.length > 0
   if (sinceRelease.bump === "none" && !replaces) {

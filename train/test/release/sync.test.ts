@@ -511,7 +511,8 @@ function cutBeta(r: ReturnType<typeof rig>, version: string, number: number): st
  * a broken pipeline, so the Check on its commit is red and a rerun repeats the
  * same pin. dev then received only `chore(ci)` commits that fix the pin: main
  * waited for a green beta that could not come, and dev had "nothing to
- * release". Nothing moved until a person set `release_as`.
+ * release". Nothing moved, and `release_as` could not move it either: Guard
+ * admits only a stable version there, which goes to main.
  */
 test("a beta whose own Check failed is superseded: dev plans the next beta of the same target over chore-only commits", async () => {
   const r = rig("red-beta", { files: withPipeline })
@@ -623,7 +624,7 @@ test("a fix after a red beta is the next beta as it always was, and nobody asks 
 test("the replacement keeps the red beta's target, also one the commits alone would not reach", async () => {
   const r = rig("red-beta-target", { files: withPipeline })
   r.land("feat: the endpoint (#1)")
-  // Cut with "release as 2.0.0-beta.1": the titles alone say 1.3.0.
+  // Cut as 2.0.0-beta.1 by a release-as given to the sync: the titles alone say 1.3.0.
   const beta = cutBeta(r, "2.0.0-beta.1", 2)
   r.gh.refChecks.set(beta, "failure")
   r.land("chore(ci): repin the pipeline (#3)")
