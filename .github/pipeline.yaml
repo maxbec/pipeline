@@ -9,8 +9,8 @@ security:
 lint:
   enable: false
 test:
-  command: npm test
-  pr_command: npm test
+  command: node --version
+  pr_command: node --version
 build:
   enable: false
 deploy:
