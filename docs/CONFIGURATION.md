@@ -244,6 +244,48 @@ Controls:
 The train runs on `vars.PIPELINE_RUNNER` in a private repository that sets
 it; otherwise, and always in a public one, on GitHub's one-core `ubuntu-slim`.
 
+### What becomes a release
+
+The version comes from the conventional titles merged since the last stable
+tag: breaking is a major, `feat` a minor, `fix`, `perf` and `revert` a patch
+(before 1.0 breaking and `feat` are both a minor). On `dev` of a repository
+that has `main` the Release PR carries `<target>-beta.N`, on `main` the stable
+`<target>`: the promotion of dev's last beta.
+
+Two rules decide whether there is a Release PR at all:
+
+- **A merge without impact after a release is not a release.** `chore`, `ci`,
+  `docs`, `test`, `refactor` and the like wait for the next `feat` or `fix`;
+  the train reports `nothing to release on dev since v…`.
+- **A release needs its own green `pipeline / Check`.** The Release PR is built
+  only over a base tip whose push run passed, and the promotion on `main`
+  waits for the Check on the commit of the beta it promotes. No other
+  commit's Check counts for it, and none is copied onto it.
+
+**A beta whose own Check is red is replaced, not repaired.** A beta can be cut
+while its Check is broken for that very commit: a caller pinned to a broken
+pipeline, a test that fails on exactly that tree. A rerun checks the same
+commit again, so the promotion would wait for good, while the repair on `dev`
+is a `chore(ci)` and by the first rule no release. The train therefore treats
+the last beta of `dev` as superseded when `pipeline / Check` on its commit ran
+to the end without passing (failed, timed out, cancelled) and `dev` has
+commits after it: they become the next beta of the same target
+(`1.3.0-beta.1` is followed by `1.3.0-beta.2`), whatever their type. That
+Release PR says which beta it replaces, waits for a green `dev` tip like any
+other, and is merged by a person; `main` then promotes the new beta on its
+own green Check. Until then the promotion reports the red Check together with
+this way out.
+
+A beta whose Check is green, still running, being rerun or only skipped (the
+release event's run) is not superseded, and the first rule holds. A rerun
+that turns the old beta green after all makes it promotable again; a
+replacement Release PR already open on `dev` then stays open and is the
+owner's to merge or close.
+
+`release_as` is no way around a red beta on `dev`: Guard admits only a stable
+`X.Y.Z` there, and in a repository that has `dev` the train gives a stable
+override to `main` alone.
+
 ### Fix
 
 When `pipeline / Check` fails on a pull request, three more jobs of the same
