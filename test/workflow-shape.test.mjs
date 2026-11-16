@@ -382,6 +382,74 @@ test("the tree lookup runs on a dispatch and a schedule only in fast mode", () =
   )
 })
 
+// A run nobody pushed has no range, and the Trunk action would check the whole
+// repository in its `all` mode: red on every repository with issues older than
+// Trunk (edilio's first full Check on v5.6.0-beta.2, run 43834465636).
+test("in a run without a push Trunk lints what the tip commit brought", () => {
+  const steps = wf().jobs.check.steps
+  const range = steps.find((s) => s.id === "lint-range")
+  const trunk = steps.find((s) => s.name === "Lint (trunk)")
+  assert.ok(steps.indexOf(range) < steps.indexOf(trunk), "the range is named before Trunk runs")
+  assert.match(range.if, /steps\.linter\.outputs\.trunk == 'true'/, "only where Trunk lints")
+  assert.match(range.if, /github\.event_name != 'pull_request' && github\.event_name != 'push'/)
+  assert.equal(trunk.with["check-mode"], "${{ steps.lint-range.outputs.mode }}", "empty on a pull request and a push")
+
+  const git = (dir, ...args) => {
+    const res = spawnSync("git", args, {
+      cwd: dir,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        HOME: dir,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@example.invalid",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@example.invalid",
+      },
+    })
+    assert.equal(res.status, 0, `git ${args.join(" ")}: ${res.stderr}`)
+    return res.stdout.trim()
+  }
+  const run = (dir) => {
+    const env = join(dir, "..", `env-${Math.random().toString(36).slice(2)}`)
+    writeFileSync(env, "")
+    const r = runStep("check", "lint-range", { CWD: dir, GITHUB_ENV: env })
+    assert.equal(r.status, 0, r.stderr)
+    assert.equal(r.outputs.mode, "push")
+    return Object.fromEntries(
+      readFileSync(env, "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("=")),
+    )
+  }
+  const dir = join(scratch(), "repo")
+  mkdirSync(dir)
+  git(dir, "init", "-q", "-b", "dev")
+  writeFileSync(join(dir, "a"), "1\n")
+  git(dir, "add", "a")
+  git(dir, "commit", "-q", "-m", "first")
+  const first = git(dir, "rev-parse", "HEAD")
+  assert.deepEqual(run(dir), { GITHUB_EVENT_BEFORE: "0".repeat(40), GITHUB_EVENT_AFTER: first }, "a root commit")
+
+  writeFileSync(join(dir, "a"), "2\n")
+  git(dir, "commit", "-q", "-am", "second")
+  const second = git(dir, "rev-parse", "HEAD")
+  assert.deepEqual(run(dir), { GITHUB_EVENT_BEFORE: first, GITHUB_EVENT_AFTER: second }, "an ordinary commit")
+
+  // A merge commit, the tip of main after a promotion: its first parent is the
+  // branch before the merge, so the range is everything the merge brought.
+  git(dir, "checkout", "-q", "-b", "side", first)
+  writeFileSync(join(dir, "b"), "1\n")
+  git(dir, "add", "b")
+  git(dir, "commit", "-q", "-m", "side")
+  git(dir, "checkout", "-q", "dev")
+  git(dir, "merge", "-q", "--no-ff", "-m", "merge", "side")
+  assert.deepEqual(run(dir), { GITHUB_EVENT_BEFORE: second, GITHUB_EVENT_AFTER: git(dir, "rev-parse", "HEAD") }, "a merge")
+})
+
 test("PIPELINE_DEPTH reaches Lint, Test and Build, and nothing else", () => {
   const check = wf().jobs.check
   const withDepth = check.steps.filter((s) => s.env && "PIPELINE_DEPTH" in s.env).map((s) => s.name)

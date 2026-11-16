@@ -962,12 +962,37 @@ jobs:
           set -euo pipefail
           LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
           if [[ -z "$LINT_COMMAND" && -f .trunk/trunk.yaml ]]; then echo "trunk=true" >> "$GITHUB_OUTPUT"; else echo "trunk=false" >> "$GITHUB_OUTPUT"; fi
+      # Trunk lints what a change brought (hold the line). A pull request and a
+      # push name that change themselves. A run nobody pushed (workflow_dispatch,
+      # schedule) names none, and the action would fall back to its `all` mode:
+      # every file of the repository, with every issue that predates Trunk there
+      # (edilio, run 43834465636: 2928 files, 11 minutes, 30 old issues, red).
+      # Such a run lints what its tip commit brought instead, the range the
+      # push Check of that commit linted. The action's push mode reads the two
+      # ends from these variables before it looks at the event.
+      - name: What does Trunk lint in a run without a push?
+        id: lint-range
+        if: >-
+          env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
+          && github.event_name != 'pull_request' && github.event_name != 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          after=$(git rev-parse HEAD)
+          # A commit without a parent: the action reads all zeros as "a new
+          # branch" and checks everything, which is that commit's change.
+          before=$(git rev-parse --verify --quiet 'HEAD^1' || echo 0000000000000000000000000000000000000000)
+          { echo "GITHUB_EVENT_BEFORE=$before"; echo "GITHUB_EVENT_AFTER=$after"; } >> "$GITHUB_ENV"
+          echo "mode=push" >> "$GITHUB_OUTPUT"
+          echo "Trunk lints ${before:0:7}..${after:0:7}, the change of the tip commit."
       - name: Lint (trunk)
         if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
         uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
         env:
           PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
         with:
+          # Empty on a pull request and a push: the action reads the event.
+          check-mode: ${{ steps.lint-range.outputs.mode }}
           # ~/.cache/trunk follows the dependency cache: a runner that keeps its
           # package store keeps trunk's tools as well.
           cache: ${{ needs.guard.outputs.dependency-cache != 'false' }}
