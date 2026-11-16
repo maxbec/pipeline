@@ -7,6 +7,7 @@ import { updateBranchRef } from "../../src/github/releases.ts"
 import type { MergeCommitter } from "../../src/release/backmerge.ts"
 import {
   PROMOTION_HEAD,
+  planRelease,
   type SyncOutput,
   type SyncResult,
   stagingBranch,
@@ -490,6 +491,232 @@ test("a released base counts its green push run, not the release run's skipped C
     { status: "completed", conclusion: "skipped" },
   ])
   assert.match(((await r.sync(null, null)) as { reason: string }).reason, /is failure on dev/)
+})
+
+/** dev's Release PR merged and tagged, the way the execute stage leaves it. */
+function cutBeta(r: ReturnType<typeof rig>, version: string, number: number): string {
+  const { seed } = r
+  git(seed, "fetch", "-q", "origin")
+  git(seed, "checkout", "-q", "-B", "dev", "origin/dev")
+  writeFileSync(join(seed, "package.json"), `{\n  "name": "demo",\n  "version": "${version}"\n}\n`)
+  git(seed, "add", "-A")
+  git(seed, "commit", "-q", "-m", `chore(release): ${version} (#${number})`)
+  git(seed, "tag", `v${version}`)
+  git(seed, "push", "-q", "origin", "dev", "--tags")
+  return git(seed, "rev-parse", "HEAD")
+}
+
+/**
+ * Seen on 2026-11-16: a v0.9.0-beta.1 was cut while the caller pinned
+ * a broken pipeline, so the Check on its commit is red and a rerun repeats the
+ * same pin. dev then received only `chore(ci)` commits that fix the pin: main
+ * waited for a green beta that could not come, and dev had "nothing to
+ * release". Nothing moved until a person set `release_as`.
+ */
+test("a beta whose own Check failed is superseded: dev plans the next beta of the same target over chore-only commits", async () => {
+  const r = rig("red-beta", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.gh.refChecks.set(beta, "failure")
+
+  // Nothing after the tag yet: there is nothing to replace the beta with.
+  const before = await r.sync(null, null)
+  assert.equal(before.kind, "nothing", JSON.stringify(before))
+
+  const tip = r.land("chore(ci): repin the pipeline (#3)")
+  const out = pr(await r.sync(null, null))
+  assert.equal(out.version, "1.3.0-beta.2")
+  assert.equal(out.target, "1.3.0")
+  assert.equal(out.prerelease, true)
+  assert.equal(out.previousTag, "v1.3.0-beta.1")
+  assert.equal(out.sourceSha, tip)
+  const pull = r.gh.pulls.get(out.prNumber)
+  assert.equal(pull?.title, "chore(release): 1.3.0-beta.2")
+  assert.match(
+    pull?.body ?? "",
+    new RegExp(
+      `replaces \`v1\\.3\\.0-beta\\.1\`: pipeline / Check is failure on its commit \`${beta.slice(0, 7)}\``,
+    ),
+    "the Release PR says why a chore-only range is a release",
+  )
+
+  // Idempotent like every other sync: the same state plans the same PR.
+  const again = await r.sync(out, null)
+  assert.equal(again.kind, "pr")
+  assert.equal((again as { changed: boolean }).changed, false)
+  assert.equal(r.gh.commits.length, 1)
+})
+
+test("a green, running or merely skipped last beta keeps the rule: a chore-only merge after it is not a release", async () => {
+  const r = rig("green-beta", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.land("chore(ci): repin the pipeline (#3)")
+  r.land("docs: the readme (#4)")
+
+  const nothing = async (why: string) => {
+    const result = await r.sync(null, null)
+    assert.equal(result.kind, "nothing", `${why}: ${JSON.stringify(result)}`)
+    assert.match(
+      (result as { reason: string }).reason,
+      /^nothing to release on dev since v1\.3\.0-beta\.1: /,
+      why,
+    )
+  }
+  r.gh.refChecks.set(beta, "success")
+  await nothing("green")
+  r.gh.refChecks.set(beta, "pending")
+  await nothing("still running")
+  r.gh.refChecks.set(beta, "none")
+  await nothing("not started")
+  r.gh.refChecks.delete(beta)
+  r.gh.refCheckRuns.set(beta, [{ status: "completed", conclusion: "skipped" }])
+  await nothing("only the release run's skipped Check")
+  r.gh.refCheckRuns.set(beta, [
+    { status: "completed", conclusion: "failure" },
+    { status: "in_progress", conclusion: null },
+  ])
+  await nothing("red, and a rerun under way")
+  r.gh.refCheckRuns.set(beta, [
+    { status: "completed", conclusion: "failure" },
+    { status: "completed", conclusion: "success" },
+  ])
+  await nothing("red once, green on the rerun")
+  assert.equal(r.gh.pulls.size, 0)
+  assert.equal(r.gh.commits.length, 0)
+})
+
+test("the beta that replaces a red one passes the same gate: its Release PR waits for a green dev tip", async () => {
+  const r = rig("red-beta-gate", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.gh.refChecks.set(beta, "failure")
+  const tip = r.land("chore(ci): a repin that is still broken (#3)")
+
+  r.gh.refChecks.set(tip, "failure")
+  const red = await r.sync(null, null)
+  assert.equal(red.kind, "pending", JSON.stringify(red))
+  assert.match((red as { reason: string }).reason, /is failure on dev .*waits for a green dev$/)
+  r.gh.refChecks.set(tip, "pending")
+  assert.equal((await r.sync(null, null)).kind, "pending")
+  assert.equal(r.gh.pulls.size, 0, "no Release PR over a dev that is not green")
+  assert.equal(r.gh.commits.length, 0)
+
+  r.gh.refChecks.set(tip, "success")
+  assert.equal(pr(await r.sync(null, null)).version, "1.3.0-beta.2")
+})
+
+test("a fix after a red beta is the next beta as it always was, and nobody asks for the beta's Check", async () => {
+  const r = rig("red-beta-fix", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.gh.refChecks.set(beta, "failure")
+  r.land("fix: the empty case (#3)")
+  const calls = r.gh.calls.length
+  assert.equal(pr(await r.sync(null, null)).version, "1.3.0-beta.2")
+  assert.deepEqual(
+    r.gh.calls.slice(calls).filter((c) => c.path.includes(`/commits/${beta}/check-runs`)),
+    [],
+  )
+})
+
+test("the replacement keeps the red beta's target, also one the commits alone would not reach", async () => {
+  const r = rig("red-beta-target", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  // Cut with "release as 2.0.0-beta.1": the titles alone say 1.3.0.
+  const beta = cutBeta(r, "2.0.0-beta.1", 2)
+  r.gh.refChecks.set(beta, "failure")
+  r.land("chore(ci): repin the pipeline (#3)")
+  const out = pr(await r.sync(null, null))
+  assert.equal(out.version, "2.0.0-beta.2")
+  assert.equal(out.target, "2.0.0")
+})
+
+test("planRelease: only a superseded beta turns a range without impact into a release", async () => {
+  const r = rig("plan-superseded")
+  const history = {
+    sha: "0".repeat(40),
+    lastStableTag: "v1.2.0",
+    lastPrereleaseTag: "v1.3.0-beta.1",
+    lastReleaseTag: "v1.3.0-beta.1",
+    commitsSinceStable: [
+      { subject: "chore(ci): repin the pipeline (#3)", body: "" },
+      { subject: "chore(release): 1.3.0-beta.1 (#2)", body: "" },
+      { subject: "feat: the endpoint (#1)", body: "" },
+    ],
+    commitsSinceRelease: [{ subject: "chore(ci): repin the pipeline (#3)", body: "" }],
+    alreadyReleased: [],
+    promotedFrom: null,
+  }
+  const opts = { currentTarget: null, releaseAs: null }
+  assert.equal((await planRelease(r.repository, "dev", history, opts)).kind, "nothing")
+  assert.deepEqual(
+    await planRelease(r.repository, "dev", history, { ...opts, supersedes: "v1.3.0-beta.1" }),
+    { kind: "release", version: "1.3.0-beta.2", target: "1.3.0", bump: "minor", prerelease: true },
+  )
+  // Nothing after the tag is nothing to cut a beta from, superseded or not.
+  assert.equal(
+    (
+      await planRelease(
+        r.repository,
+        "dev",
+        { ...history, commitsSinceRelease: [] },
+        { ...opts, supersedes: "v1.3.0-beta.1" },
+      )
+    ).kind,
+    "nothing",
+  )
+})
+
+test("main waiting on a red beta names the way out: the next beta from dev replaces it", async () => {
+  const r = rig("red-beta-main", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  const at = beta.slice(0, 7)
+  const waits = `pipeline / Check is failure on v1.3.0-beta.1 at ${at}; the Release PR waits for a green v1.3.0-beta.1`
+
+  r.gh.refChecks.set(beta, "failure")
+  assert.deepEqual(await r.sync(null, null, "main"), {
+    kind: "pending",
+    reason: `${waits}. If a rerun cannot turn it green, the next beta from dev replaces it: dev has no commit after v1.3.0-beta.1 yet, and the first one merged there, of any type, starts that beta's Release PR`,
+  })
+
+  r.land("chore(ci): repin the pipeline (#3)")
+  r.land("docs: the readme (#4)")
+  assert.deepEqual(await r.sync(null, null, "main"), {
+    kind: "pending",
+    reason: `${waits}. If a rerun cannot turn it green, the next beta from dev replaces it: dev is 2 commit(s) past v1.3.0-beta.1, and the train keeps that beta's Release PR on dev`,
+  })
+  assert.equal(r.gh.pulls.size, 0, "a red beta is never promoted")
+
+  // Not red for good: a Check that has not run, or only the release run's skipped one, says what it said.
+  r.gh.refChecks.set(beta, "pending")
+  assert.deepEqual(await r.sync(null, null, "main"), {
+    kind: "pending",
+    reason: `waiting for pipeline / Check on v1.3.0-beta.1 at ${at} to finish`,
+  })
+  r.gh.refChecks.delete(beta)
+  r.gh.refCheckRuns.set(beta, [{ status: "completed", conclusion: "skipped" }])
+  assert.deepEqual(await r.sync(null, null, "main"), {
+    kind: "pending",
+    reason: `pipeline / Check is skipped on v1.3.0-beta.1 at ${at}; the Release PR waits for a green v1.3.0-beta.1`,
+  })
+})
+
+test("once the replacement is cut and green, main promotes it and the red beta is history", async () => {
+  const r = rig("red-beta-promoted", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const red = cutBeta(r, "1.3.0-beta.1", 2)
+  r.gh.refChecks.set(red, "failure")
+  r.land("chore(ci): repin the pipeline (#3)")
+  const green = cutBeta(r, "1.3.0-beta.2", 4)
+
+  const out = pr(await r.sync(null, null, "main"))
+  assert.equal(out.mode, "promotion")
+  assert.equal(out.version, "1.3.0")
+  assert.equal(out.sourceRef, "v1.3.0-beta.2")
+  assert.equal(out.sourceSha, green)
+  assert.equal((await r.sync(null, null)).kind, "nothing", "dev has nothing after its green beta")
 })
 
 /**

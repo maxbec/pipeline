@@ -132,6 +132,14 @@ For `dev` and then `main` of a repository that has `dev`, for `main` otherwise:
    (`src/release/previous.ts`): the open Release PR, its head commit, which
    must be verified and titled `chore(release): <version>`, and that commit's
    parent. The pull request's title and body are not trusted.
+   A range without a `feat`, `fix`, `perf` or `revert` plans nothing, with one
+   exception: when `pipeline / Check` on the commit of dev's last beta ran to
+   its end and did not pass, that beta can never be promoted, and the commits
+   after it are planned as the next beta of the same target
+   (`supersededBeta` in `src/release/sync.ts`; "What becomes a release" in
+   [docs/CONFIGURATION.md](../docs/CONFIGURATION.md#what-becomes-a-release)).
+   The gates do not move: the new Release PR waits for a green base tip, and
+   the promotion for the new beta's own green Check.
 
 Every step looks before it writes, so a run that died is finished by the next
 one: a tag without a release gets the release, a release without the label

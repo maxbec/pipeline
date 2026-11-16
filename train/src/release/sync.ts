@@ -27,7 +27,7 @@ import {
   readTreeFile,
   resolveRef,
 } from "./history.ts"
-import { type Bump, baseOf, parseVersion } from "./semver.ts"
+import { type Bump, baseOf, compareVersions, parseVersion } from "./semver.ts"
 import { deriveVersion, impactOf } from "./version.ts"
 import { applyVersion } from "./version-files.ts"
 
@@ -186,7 +186,16 @@ export async function planRelease(
   repository: Repository,
   branch: string,
   history: ReleaseHistory,
-  opts: { currentTarget: string | null; releaseAs: string | null },
+  opts: {
+    currentTarget: string | null
+    releaseAs: string | null
+    /**
+     * The branch's last beta, when its own Check failed and it can therefore
+     * never be promoted (`supersededBeta`). Whatever came after it is then
+     * its replacement, feat or chore.
+     */
+    supersedes?: string | null
+  },
 ): Promise<
   | { kind: "nothing"; reason: string }
   | { kind: "release"; version: string; target: string; bump: string; prerelease: boolean }
@@ -203,7 +212,15 @@ export async function planRelease(
     currentTarget: null,
     override: opts.releaseAs,
   })
-  if (sinceRelease.bump === "none") {
+  // Unless the last beta is dead: a beta whose own Check failed is never
+  // promoted, and the commits after it are usually the `chore(ci)` that
+  // repairs the Check. Without this they released nothing, and the cycle
+  // stood still until a person set "release as" (a 0.9.0-beta.1 cut under a
+  // broken pipeline pin, 2026-11-16). The replacement is the next beta of the
+  // same cycle: the dead beta's target is a floor, as an open Release PR's is.
+  const superseded = opts.supersedes ? parseVersion(opts.supersedes) : null
+  const replaces = superseded !== null && history.commitsSinceRelease.length > 0
+  if (sinceRelease.bump === "none" && !replaces) {
     return {
       kind: "nothing",
       reason: `nothing to release on ${branch} since ${history.lastReleaseTag ?? "the beginning"}: ${sinceRelease.reason}${setAside(history)}`,
@@ -215,7 +232,9 @@ export async function planRelease(
     lastPrerelease: history.lastPrereleaseTag,
     branch,
     repoKind,
-    currentTarget: opts.currentTarget,
+    currentTarget: replaces
+      ? laterTarget(opts.currentTarget, baseOf(superseded))
+      : opts.currentTarget,
     override: opts.releaseAs,
   })
   if (!derived.version || !derived.target) {
@@ -228,6 +247,10 @@ export async function planRelease(
     bump: derived.bump,
     prerelease: parseVersion(derived.version)?.prerelease !== null,
   }
+}
+
+function laterTarget(a: string | null, b: string): string {
+  return a !== null && compareVersions(a, b) > 0 ? a : b
 }
 
 /** What the patch-identity filter dropped, for the "nothing" reason. */
@@ -252,6 +275,11 @@ interface ReleaseSource {
   head: string
   mergeMethod: MergeMethod
   history: ReleaseHistory
+  /**
+   * A promotion of dev's last beta only: how many commits dev has after that
+   * beta. They are what replaces it should its Check stay red.
+   */
+  devPastBeta?: number
 }
 
 /**
@@ -316,6 +344,9 @@ async function readSource(repository: Repository, branch: string): Promise<Relea
     sourceRef,
     head: PROMOTION_HEAD,
     mergeMethod: "merge",
+    ...(dev.lastPrereleaseTag !== null && sourceRef === dev.lastPrereleaseTag
+      ? { devPastBeta: dev.commitsSinceRelease.length }
+      : {}),
     history: {
       sha,
       lastStableTag: main.lastStableTag,
@@ -474,8 +505,41 @@ async function baseCheckPending(
   repository: Repository,
   sha: string,
   label: string,
+  /** Appended to the reason of a Check that failed, for a base that cannot move: the way out. */
+  ifFailed = "",
 ): Promise<string | null> {
   if ((await readTreeFile(repository.path, sha, CALLER_PATH)) === null) return null
+  const check = await readRequiredChecks(client, repo, sha)
+  const at = `${label} at ${sha.slice(0, 7)}`
+  switch (check.state) {
+    case "passed":
+      return null
+    case "missing":
+      return `waiting for ${check.name} on ${at} to start`
+    case "running":
+      return `waiting for ${check.name} on ${at} to finish`
+    default:
+      return `${check.name} is ${check.conclusion} on ${at}; the Release PR waits for a green ${label}${check.state === "failed" ? ifFailed : ""}`
+  }
+}
+
+/**
+ * How a commit stands with the required Checks: the one reading the gate
+ * above and `supersededBeta` share, so that "red" means the same to both.
+ *
+ * `failed` is a Check that ran to its end and did not pass. `skipped` is not
+ * that: a commit that only carries a release event's run was never checked.
+ */
+type CheckReading =
+  | { state: "passed" }
+  | { state: "missing" | "running"; name: string }
+  | { state: "failed" | "skipped"; name: string; conclusion: string }
+
+async function readRequiredChecks(
+  client: GitHubClient,
+  repo: RepoRef,
+  sha: string,
+): Promise<CheckReading> {
   // Every run, not GitHub's default "latest": a released commit also carries
   // the release event's run, whose Check is always skipped, and that one is
   // the latest. Seen on the first promotion after this gate, maxbec/pipeline
@@ -485,17 +549,68 @@ async function baseCheckPending(
     check_runs: { name: string; status: string; conclusion: string | null }[]
   }>("GET", `/repos/${repo.owner}/${repo.name}/commits/${sha}/check-runs?filter=all&per_page=100`)
   const runs = res.body?.check_runs ?? []
-  const at = `${label} at ${sha.slice(0, 7)}`
   for (const name of REQUIRED_CHECKS) {
     const named = runs.filter((r) => r.name === name)
     // One pass proves the tree: it is the same commit whichever run checked it.
     if (named.some((r) => r.conclusion === "success")) continue
-    if (named.length === 0) return `waiting for ${name} on ${at} to start`
-    if (named.some((r) => r.status !== "completed")) return `waiting for ${name} on ${at} to finish`
+    if (named.length === 0) return { state: "missing", name }
+    if (named.some((r) => r.status !== "completed")) return { state: "running", name }
     const red = named.find((r) => r.conclusion !== "skipped") ?? named[0]
-    return `${name} is ${red?.conclusion ?? "unknown"} on ${at}; the Release PR waits for a green ${label}`
+    const conclusion = red?.conclusion ?? "unknown"
+    return { state: conclusion === "skipped" ? "skipped" : "failed", name, conclusion }
   }
-  return null
+  return { state: "passed" }
+}
+
+/** dev's last beta, dead: its own required Check ran and did not pass. */
+interface SupersededBeta {
+  tag: string
+  sha: string
+  check: string
+  conclusion: string
+}
+
+/**
+ * The last beta of dev, when it can never be promoted and dev has moved on.
+ *
+ * A promotion stands on the Check of the beta's own commit (`baseCheckPending`
+ * over the tag), and no later commit can change what that commit is. A beta
+ * cut while its Check was broken (a caller pinned to a broken pipeline, a
+ * test that fails on exactly that tree) therefore blocks main for good,
+ * while dev, which holds the repair as `chore(ci)`, has "nothing to release".
+ * Such a beta is superseded: the commits after it become the next beta, which
+ * passes every gate on its own commit, like any other.
+ *
+ * Only a Check that ran to its end counts. One that is missing, running or
+ * being rerun may still pass, and a green beta keeps the rule that a
+ * docs-only merge is not a release.
+ */
+async function supersededBeta(
+  client: GitHubClient,
+  repo: RepoRef,
+  repository: Repository,
+  src: ReleaseSource,
+): Promise<SupersededBeta | null> {
+  const { history } = src
+  const tag = history.lastPrereleaseTag
+  if (src.mode !== "branch" || src.source !== "dev" || repository.kind !== "major") return null
+  if (tag === null || history.commitsSinceRelease.length === 0) return null
+  const sha = await resolveRef(repository.path, `refs/tags/${tag}`)
+  if (!sha) return null
+  const check = await readRequiredChecks(client, repo, sha)
+  if (check.state !== "failed") return null
+  return { tag, sha, check: check.name, conclusion: check.conclusion }
+}
+
+/** What a promotion that waits on a failed beta adds to its reason: how the cycle goes on. */
+function replacementHint(src: ReleaseSource): string {
+  if (src.devPastBeta === undefined) return ""
+  const tag = src.sourceRef
+  const state =
+    src.devPastBeta > 0
+      ? `dev is ${src.devPastBeta} commit(s) past ${tag}, and the train keeps that beta's Release PR on dev`
+      : `dev has no commit after ${tag} yet, and the first one merged there, of any type, starts that beta's Release PR`
+  return `. If a rerun cannot turn it green, the next beta from dev replaces it: ${state}`
 }
 
 export async function syncReleasePr(input: SyncInput): Promise<SyncResult> {
@@ -519,10 +634,20 @@ export async function syncReleasePr(input: SyncInput): Promise<SyncResult> {
   if (untagged) return untagged
   // Rule 3 (the target only grows) holds within one Release PR. A hotfix
   // under an open promotion PR is another release line: its target starts over.
-  const plan = await planRelease(repository, branch, history, {
-    currentTarget: previous && previous.head === src.head ? previous.target : null,
-    releaseAs,
-  })
+  const currentTarget = previous && previous.head === src.head ? previous.target : null
+  let plan = await planRelease(repository, branch, history, { currentTarget, releaseAs })
+  // Nothing new by the titles: unless dev's last beta is dead, in which case
+  // what came after it is its replacement. Asked only here, so a cycle that
+  // releases anyway costs no call.
+  const replaced =
+    plan.kind === "nothing" ? await supersededBeta(client, repo, repository, src) : null
+  if (replaced) {
+    plan = await planRelease(repository, branch, history, {
+      currentTarget,
+      releaseAs,
+      supersedes: replaced.tag,
+    })
+  }
   if (plan.kind === "nothing") {
     const reason =
       src.mode === "promotion" ? `nothing to promote from dev: ${plan.reason}` : plan.reason
@@ -589,7 +714,14 @@ export async function syncReleasePr(input: SyncInput): Promise<SyncResult> {
   }
 
   const label = src.sourceRef.replace(/^origin\//, "")
-  const waitFor = await baseCheckPending(client, repo, repository, history.sha, label)
+  const waitFor = await baseCheckPending(
+    client,
+    repo,
+    repository,
+    history.sha,
+    label,
+    replacementHint(src),
+  )
   if (waitFor) return { kind: "pending", reason: waitFor }
 
   const section = renderSection({
@@ -691,7 +823,9 @@ export async function syncReleasePr(input: SyncInput): Promise<SyncResult> {
       ? `This is the promotion of \`dev\` into \`main\`: \`${src.sourceRef}\` (\`${history.sha.slice(0, 7)}\`), the last release of dev, merged by merge commit. Commits on dev after that release wait for their own beta.${forwardNote}`
       : src.mode === "hotfix"
         ? "This is a hotfix release from `main`'s own commits; its backmerge into `dev` follows the release."
-        : null
+        : replaced
+          ? `This beta replaces \`${replaced.tag}\`: ${replaced.check} is ${replaced.conclusion} on its commit \`${replaced.sha.slice(0, 7)}\`, and a release is promoted only on its own green Check. The commits since carry no feat, fix, perf or revert of their own; they are released so that the cycle can go on.`
+          : null
   const body = prBody(section, plan.version, branch, plan.prerelease, note)
   let number: number
   let url: string
