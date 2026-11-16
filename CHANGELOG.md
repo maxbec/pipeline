@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.6.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.1...v5.6.0-beta.2) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** name the build cache when a lockfile kind is missing ([#166](https://github.com/maxbec/pipeline/issues/166)) ([e5cc38e](https://github.com/maxbec/pipeline/commit/e5cc38e1df61c40c7f2663335e480187247e6be4))
+
 ## [5.6.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.5.3...v5.6.0-beta.1) (2026-11-15)
 
 
