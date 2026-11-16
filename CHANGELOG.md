@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.6.0-beta.3](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.2...v5.6.0-beta.3) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** lint the tip commit's change in a run without a push ([#168](https://github.com/maxbec/pipeline/issues/168)) ([6ca97fe](https://github.com/maxbec/pipeline/commit/6ca97fe0a155bae2ff83699d6c1cf69e9926b5c9))
+
 ## [5.6.0-beta.2](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.1...v5.6.0-beta.2) (2026-11-16)
 
 
