@@ -19,6 +19,8 @@ on:
   # No nightly schedule: .github/pipeline.yaml sets no `test.pr_command`, so
   # every Check here is the full one already.
   workflow_dispatch: {}
+  schedule:
+    - cron: '23 2 * * *'
 
 concurrency:
   group: pipeline-${{ github.event_name }}-${{ github.ref }}
