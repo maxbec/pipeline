@@ -234,7 +234,15 @@ test("Node is set up before pnpm, and the dependency cache is saved by pushes on
   assert.equal(saves("check").length, 2, "the dependency cache and the build cache")
   for (const step of saves("check")) {
     assert.match(step.uses, /^actions\/cache\/save@[0-9a-f]{40}$/)
-    assert.match(String(step.if), /github\.event_name == 'push'/, `"${step.name}" saves on a push only`)
+    // Never from a pull request: its scope is the pull request alone. The
+    // build cache is also saved by the full Check (its own test below).
+    assert.match(
+      String(step.if),
+      step.name === "Save the build cache"
+        ? /github\.event_name != 'pull_request'/
+        : /github\.event_name == 'push'/,
+      `"${step.name}" never saves from a pull request`,
+    )
   }
 })
 
@@ -247,6 +255,20 @@ test("the build cache is restored on every Check and saved after Build on a push
   assert.equal(steps[at("Name the build cache")].if, "env.REUSE != 'true' && needs.guard.outputs.build-cache == 'true'")
   assert.equal(steps[at("Save the build cache")].with.key, "${{ steps.build-cache.outputs.key }}")
   assert.match(steps[at("Name the build cache")].run, /PIPELINE_BUILD_CACHE_DIR=/)
+})
+
+// Where pull requests and pushes run the fast Check, a push after a squash
+// merge reuses the pull request's result and does no work, so it saves nothing.
+// The run that rebuilds every package on the base branch is the full one, by
+// dispatch or by night (edilio 2026-11-16: no entry at all until a push happened
+// not to be a reuse). A pull request still saves nothing: its entry would be
+// readable by that pull request alone.
+test("every run but a pull request saves the build cache, the full Check by dispatch or by night included", () => {
+  const save = wf().jobs.check.steps.find((s) => s.name === "Save the build cache")
+  assert.equal(
+    save.if,
+    "env.REUSE != 'true' && steps.build-cache.outputs.key != '' && github.event_name != 'pull_request'",
+  )
 })
 
 // The step runs under `bash -e -o pipefail`, and no repository has all three

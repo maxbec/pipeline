@@ -919,9 +919,12 @@ jobs:
 
       # runtime.build_cache: a task runner's result cache (turbo's, for one)
       # that outlives the job. Restored on every Check: a pull request reads the
-      # newest entry its base branch saved. Saved only by a push, once every
-      # step passed, under a new key per run, so the base branch always offers
-      # its latest state and no pull request stores a copy nobody else can read.
+      # newest entry its base branch saved. Saved by every run but a pull
+      # request's, once every step passed, under a new key per run, so the base
+      # branch always offers its latest state and no pull request stores a copy
+      # nobody else can read. That includes the full Check by dispatch or by
+      # night: where a push only reuses its pull request's fast Check, that run
+      # is the one that rebuilds every package on the base branch.
       # The key's lockfile and Node parts make a new lockfile or Node start from
       # the closest older entry instead of an exact one; the repository's own
       # hashing decides what is replayed (edilio: scripts/ci-turbo.sh).
@@ -1062,7 +1065,7 @@ jobs:
           else echo "::notice::No build command configured and none detected; skipped."; fi
       # After every step that may write to it, and only when all of them passed.
       - name: Save the build cache
-        if: env.REUSE != 'true' && steps.build-cache.outputs.key != '' && github.event_name == 'push'
+        if: env.REUSE != 'true' && steps.build-cache.outputs.key != '' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.build-cache.outputs.path }}

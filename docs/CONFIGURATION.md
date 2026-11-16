@@ -15,7 +15,7 @@ runtime:
   node_version: '' # default: .nvmrc, then .node-version, then package.json engines.node, then lts/*
   python_version: '3.12'
   dependency_cache: true # default: true on a GitHub-hosted runner, false when the runner labels contain self-hosted (its package store outlives the job, and saving the cache uploads gigabytes over the runner's own uplink). Restored on every run, saved only by a push to dev/main: a pull request reads its base branch's copy and stores none of its own. Also switches trunk's cache
-  build_cache: false # true: Check restores ~/.cache/pipeline-build-cache on every run and saves it after Build on a push to dev/main (a new entry per run, keyed by OS, Node and lockfile, falling back to the newest older one). The path is exported as PIPELINE_BUILD_CACHE_DIR; point a task runner's cache there (turbo: TURBO_CACHE_DIR). The repository decides what is in it and proves that replaying it is safe. Off whenever dependency_cache is
+  build_cache: false # true: Check restores ~/.cache/pipeline-build-cache on every run and saves it after Build on every run but a pull request's, so a push to dev/main and the full Check by dispatch or by night (a new entry per run, keyed by OS, Node and lockfile, falling back to the newest older one). The path is exported as PIPELINE_BUILD_CACHE_DIR; point a task runner's cache there (turbo: TURBO_CACHE_DIR). The repository decides what is in it and proves that replaying it is safe. Off whenever dependency_cache is
 
 runner:
   labels: [] # default: vars.PIPELINE_RUNNER if set on the repository or org, else ubuntu-latest
