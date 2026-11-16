@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.6.0-beta.4](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.3...v5.6.0-beta.4) (2026-11-16)
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** save the build cache after the full Check too ([#173](https://github.com/maxbec/pipeline/issues/173)) ([e172e6a](https://github.com/maxbec/pipeline/commit/e172e6ac3db741f330fdd886d7f3dfdee5605525))
+* **train:** replace a beta whose own Check is red with the next beta ([#171](https://github.com/maxbec/pipeline/issues/171)) ([49d13cd](https://github.com/maxbec/pipeline/commit/49d13cd253ee67422766d624ac861c1a90cbaf31))
+
 ## [5.6.0-beta.3](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.2...v5.6.0-beta.3) (2026-11-16)
 
 
