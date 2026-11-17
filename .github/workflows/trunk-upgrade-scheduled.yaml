@@ -1,8 +1,6 @@
-# Managed by navigaite/.github bootstrap. Do not edit manually —
-# changes will be overwritten the next time bootstrap-maintenance.sh runs.
-#
-# The cron minute/hour is staggered per repo to avoid a PR storm across
-# all Navigaite repos. Bootstrap script substitutes 0 5 * * 2 at install time.
+# This repository's own weekly Trunk Upgrade. It calls the reusable workflow
+# of its own tree, like ci.yaml and train-self.yaml do: a tag such as @v3 kept
+# running a version from 2026-08 that no later fix reached.
 ---
 name: 🧰 Trunk Upgrade
 
@@ -21,5 +19,5 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: maxbec/pipeline/.github/workflows/trunk-upgrade.yaml@v3
+    uses: ./.github/workflows/trunk-upgrade.yaml
     secrets: inherit
