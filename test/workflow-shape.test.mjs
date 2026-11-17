@@ -7,6 +7,11 @@ import { ROOT, runStep, scratch, WORKFLOW, yaml } from "./helpers.mjs"
 
 const wf = () => yaml(WORKFLOW)
 
+// The one-core runner, unless the variable PIPELINE_SLIM is `off`.
+const SLIM = "${{ vars.PIPELINE_SLIM == 'off' && 'ubuntu-latest' || 'ubuntu-slim' }}"
+const TRAIN_RUNNER =
+  "${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || (vars.PIPELINE_SLIM == 'off' && '[\"ubuntu-latest\"]') || '[\"ubuntu-slim\"]') }}"
+
 test("the universal pipeline is Guard, Check and Deploy, plus the recheck that most runs never start", () => {
   const doc = wf()
   assert.ok(doc.on.workflow_call, "reusable workflow")
@@ -185,7 +190,7 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   assert.equal(check["runs-on"], "${{ fromJSON(needs.guard.outputs.check-runner) }}")
   assert.equal(
     doc.jobs.guard.outputs["check-runner"],
-    "${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && '[\"ubuntu-slim\"]' || steps.config.outputs.runner }}",
+    "${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && (vars.PIPELINE_SLIM == 'off' && '[\"ubuntu-latest\"]' || '[\"ubuntu-slim\"]') || steps.config.outputs.runner }}",
   )
   assert.equal(doc.jobs.guard.outputs.reuse, "${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}")
   assert.equal(
@@ -358,7 +363,7 @@ test("a passing Check marks its tree last, under the name Guard looks up", () =>
 
 test("Guard runs on the one-core hosted runner, with the permissions it had", () => {
   const guard = wf().jobs.guard
-  assert.equal(guard["runs-on"], "ubuntu-slim", "never the configured runner: Guard only reads files and asks the API")
+  assert.equal(guard["runs-on"], SLIM, "never the configured runner: Guard only reads files and asks the API")
   assert.equal(guard["timeout-minutes"], 5, "well inside that runner's 15-minute limit")
   assert.deepEqual(guard.permissions, { contents: "read", "pull-requests": "read", actions: "read" })
   for (const step of guard.steps) {
@@ -515,7 +520,7 @@ test("the recheck starts only after a green full Check on a dispatch or a schedu
     "(github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.check.result == 'success' && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full' && needs.guard.outputs.tree != ''",
   )
   assert.ok(!/\b(always|failure|cancelled)\(\)/.test(recheck.if), "no status function: a failed or skipped Check skips it")
-  assert.equal(recheck["runs-on"], "ubuntu-slim")
+  assert.equal(recheck["runs-on"], SLIM)
   assert.equal(recheck["timeout-minutes"], 5)
   assert.equal(recheck["continue-on-error"], true, "it never fails the workflow")
   assert.equal(recheck.env, undefined)
@@ -617,9 +622,31 @@ test("the train runs on a dispatch, a schedule and a green Pipeline run of a pul
 test("a public repository's train is always GitHub-hosted", () => {
   // Private and PIPELINE_RUNNER set: the caller's runner. Anything else,
   // including an event that carries no repository.private: hosted.
+  assert.equal(yaml(TRAIN).jobs.train["runs-on"], TRAIN_RUNNER)
+})
+
+// PIPELINE_SLIM = off: on 2026-11-17 GitHub handed out no ubuntu-slim runner
+// for 45 minutes while ubuntu-latest started at once. Guard is the first job,
+// so no Check ran in any repository, the pipeline's own included.
+test("PIPELINE_SLIM = off moves every one-core job to ubuntu-latest, and only there", () => {
+  const doc = wf()
+  const train = yaml(TRAIN)
+  const slimJobs = [
+    ...Object.values(doc.jobs).map((j) => j["runs-on"]),
+    doc.jobs.guard.outputs["check-runner"],
+    ...Object.values(train.jobs).map((j) => j["runs-on"]),
+  ].filter((r) => typeof r === "string" && r.includes("ubuntu-slim"))
+  assert.equal(slimJobs.length, 6, "Guard, Recheck, the Check that only reports, and the train's three jobs")
+  for (const runner of slimJobs) {
+    assert.match(runner, /vars\.PIPELINE_SLIM == 'off' && '(\[")?ubuntu-latest("\])?'/, runner)
+    // The switch names no label of its own: a variable anyone with write
+    // access can set must not point a public repository at another runner.
+    assert.doesNotMatch(runner, /fromJSON\(\s*vars\.PIPELINE_SLIM|\$\{\{\s*vars\.PIPELINE_SLIM\s*\}\}/, runner)
+  }
   assert.equal(
-    yaml(TRAIN).jobs.train["runs-on"],
-    "${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '[\"ubuntu-slim\"]') }}",
+    [...JSON.stringify(doc.jobs).matchAll(/ubuntu-slim/g)].length + [...JSON.stringify(train.jobs).matchAll(/ubuntu-slim/g)].length,
+    6,
+    "no job names the one-core runner without the switch",
   )
 })
 

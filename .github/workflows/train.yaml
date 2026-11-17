@@ -75,8 +75,11 @@ jobs:
     # one-core rate: this job waits for the API and for git and has no use for
     # a second core. The image has bash, git, yq and Node, which is all the
     # steps below use; none needs Docker or sudo. Its limit is 15 minutes a
-    # job, which is this job's own.
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
+    # job, which is this job's own. The variable PIPELINE_SLIM = off swaps it
+    # for ubuntu-latest, for the hours GitHub hands out no one-core runner.
+    runs-on: >-
+      ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER)
+      || (vars.PIPELINE_SLIM == 'off' && '["ubuntu-latest"]') || '["ubuntu-slim"]') }}
     timeout-minutes: 15
     # One train per repository, and a queued one waits: two runs must never
     # merge or tag at the same time.
@@ -201,7 +204,9 @@ jobs:
       !startsWith(github.event.workflow_run.head_branch, 'backmerge/') &&
       !startsWith(github.event.workflow_run.head_branch, 'hotfix/')
     # API calls only, so the small runner; see the Train job.
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
+    runs-on: >-
+      ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER)
+      || (vars.PIPELINE_SLIM == 'off' && '["ubuntu-latest"]') || '["ubuntu-slim"]') }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -440,7 +445,9 @@ jobs:
     needs: [fix-triage, fix-propose]
     if: always() && needs.fix-triage.outputs.action == 'propose'
     # API calls only, so the small runner; see the Train job.
-    runs-on: ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER) || '["ubuntu-slim"]') }}
+    runs-on: >-
+      ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER)
+      || (vars.PIPELINE_SLIM == 'off' && '["ubuntu-latest"]') || '["ubuntu-slim"]') }}
     timeout-minutes: 10
     permissions:
       contents: read

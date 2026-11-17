@@ -75,7 +75,12 @@ jobs:
     # The one-core container runner: Guard reads a few files and asks the API,
     # with bash, yq, jq, gh, git and python3, all of which that image carries.
     # It has no Docker and a 15-minute limit, neither of which Guard comes near.
-    runs-on: ubuntu-slim
+    # The variable PIPELINE_SLIM = off (repository or organization) moves every
+    # one-core job to ubuntu-latest: on 2026-11-17 GitHub handed out no
+    # ubuntu-slim runner for 45 minutes while ubuntu-latest started at once,
+    # and with Guard queued no Check ran anywhere. It names no label of its
+    # own, so it cannot point a public repository at a self-hosted runner.
+    runs-on: ${{ vars.PIPELINE_SLIM == 'off' && 'ubuntu-latest' || 'ubuntu-slim' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -135,7 +140,7 @@ jobs:
       # A reused Check needs no tooling, and one that only reports "not fully
       # verified" needs none either, so neither takes the configured runner:
       # the one-core runner Guard uses is enough.
-      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && '["ubuntu-slim"]' || steps.config.outputs.runner }}
+      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && (vars.PIPELINE_SLIM == 'off' && '["ubuntu-latest"]' || '["ubuntu-slim"]') || steps.config.outputs.runner }}
     steps:
       - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1125,7 +1130,7 @@ jobs:
       && needs.check.result == 'success'
       && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full'
       && needs.guard.outputs.tree != ''
-    runs-on: ubuntu-slim
+    runs-on: ${{ vars.PIPELINE_SLIM == 'off' && 'ubuntu-latest' || 'ubuntu-slim' }}
     timeout-minutes: 5
     continue-on-error: true
     permissions:
