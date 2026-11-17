@@ -22,7 +22,7 @@ export interface TriageStepInput {
   client: GitHubClient
   repo: RepoRef
   runId: number
-  /** Whether the repository has the Claude token; without it there is a rerun but no proposal. */
+  /** Whether the repository has the Claude token; without it there is at most a rerun, never a proposal. */
   claudeAvailable: boolean
   /** Where `log.txt`, `files.json` and `prompt.txt` go. */
   inputDir: string
@@ -58,7 +58,7 @@ export async function runTriage(input: TriageStepInput): Promise<TriageOutputs> 
 
   if (triage.action === "rerun") {
     await rerunFailedJobs(client, repo, input.runId)
-    notice("Fix: first failure of this run; its failed jobs are rerun once.")
+    notice("Fix: first failure of this run, and not in Lint, Test or Build; its failed jobs are rerun once.")
     return outputs("rerun")
   }
 
@@ -83,7 +83,7 @@ export async function runTriage(input: TriageStepInput): Promise<TriageOutputs> 
 
   if (!input.claudeAvailable) {
     notice(
-      `Fix: #${triage.pr} is still red after the rerun, but CLAUDE_CODE_OAUTH_TOKEN is not set; no fix is proposed here.`,
+      `Fix: #${triage.pr} is red and a rerun does not cure it, but CLAUDE_CODE_OAUTH_TOKEN is not set; no fix is proposed here.`,
     )
     return outputs("none")
   }

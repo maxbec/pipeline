@@ -10,8 +10,10 @@ on:
     workflows: [Pipeline]
     types: [completed]
   workflow_dispatch:
+  # Four times a day, like the callers the fleet tool renders; the half-hourly
+  # sweep of this account's repositories is train-sweep.yaml.
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '17 */6 * * *'
 
 permissions: {}
 

@@ -45,6 +45,27 @@ test("triage: the first failure reruns the failed jobs and writes nothing", asyn
   assert.equal(existsSync(join(t.dir, "fix-input")), false)
 })
 
+test("triage: a first failure of the tests is not rerun; the proposal's input is written at once", async () => {
+  const t = world({ files: [{ filename: "src/a.ts", status: "modified" }] })
+  t.w.run(7, t.headSha, "feat/x", { failedStep: "Test", log: "Error: expected 1 to be 2\n" })
+  const { outputs, notices } = await triage(t)
+  assert.deepEqual(outputs, { action: "propose", pr: "1", head_sha: t.headSha, attempt: "1" })
+  assert.deepEqual(t.w.reruns, [], "a rerun of the same commit would fail the same way")
+  assert.match(readFileSync(join(t.dir, "fix-input", "prompt.txt"), "utf8"), /Error: expected 1 to be 2/)
+  assert.match(notices.join("\n"), /attempt 1 of 3/)
+})
+
+test("triage: without the Claude token a first failure of the tests is neither rerun nor patched", async () => {
+  const t = world()
+  t.w.run(7, t.headSha, "feat/x", { failedStep: "Test" })
+  const { outputs, notices } = await triage(t, { claude: false })
+  assert.equal(outputs.action, "none")
+  assert.deepEqual(t.w.reruns, [])
+  assert.match(notices.join("\n"), /CLAUDE_CODE_OAUTH_TOKEN/)
+  assert.doesNotMatch(notices.join("\n"), /after the rerun/, "there was none")
+  assert.equal(existsSync(join(t.dir, "fix-input")), false)
+})
+
 test("triage: a second failure writes the log excerpt, the file list and the prompt", async () => {
   const t = world({
     files: [

@@ -132,6 +132,14 @@ For `dev` and then `main` of a repository that has `dev`, for `main` otherwise:
    (`src/release/previous.ts`): the open Release PR, its head commit, which
    must be verified and titled `chore(release): <version>`, and that commit's
    parent. The pull request's title and body are not trusted.
+   A range without a `feat`, `fix`, `perf` or `revert` plans nothing, with one
+   exception: when `pipeline / Check` on the commit of dev's last beta ran to
+   its end and did not pass, that beta can never be promoted, and the commits
+   after it are planned as the next beta of the same target
+   (`supersededBeta` in `src/release/sync.ts`; "What becomes a release" in
+   [docs/CONFIGURATION.md](../docs/CONFIGURATION.md#what-becomes-a-release)).
+   The gates do not move: the new Release PR waits for a green base tip, and
+   the promotion for the new beta's own green Check.
 
 Every step looks before it writes, so a run that died is finished by the next
 one: a tag without a release gets the release, a release without the label
@@ -167,7 +175,11 @@ fix.ts collect   src/fix/collect.ts            what Claude Code changed in the t
 fix.ts commit    src/fix/commit.ts, guard.ts   the guard, then one signed commit or a comment
 ```
 
-`triage.ts` decides from the run and the pull request as GitHub reports them;
+`triage.ts` decides from the run and the pull request as GitHub reports them.
+A run's first failure is rerun once, unless the Check job's failed step is
+`Lint`, `Lint (trunk)`, `Test` or `Build`: the same commit fails those the same
+way, so they go to the proposal at once (edilio, 2026-11-15: six reruns, none
+recovered);
 `prompt.ts` builds the prompt around the failed job's log, fenced as untrusted
 data; `guard.ts` is the allowlist a proposed change has to pass. `collect`
 runs next to a tree the pull request controls and executes nothing from it;
@@ -204,7 +216,8 @@ Per repository, in one signed commit (`createCommitOnBranch`) on the branch
 - `.github/workflows/ci.yaml` from `examples/caller.yaml` and
   `.github/workflows/train.yaml` from `examples/train-caller.yaml`, both at the
   same pin: the sha on the `uses:` line, the tag in a comment above it, no
-  line over 120 characters.
+  line over 120 characters. The nightly `schedule` of `ci.yaml` (the full
+  Check) is rendered only where `.github/pipeline.yaml` sets `test.pr_command`.
 - `.github/pipeline.yaml` in version 3, the files of earlier release tooling
   deleted, and the pipeline section of `AGENTS.md` / `CLAUDE.md` rewritten
   where the file has one.

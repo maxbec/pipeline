@@ -241,10 +241,29 @@ test("runtime.dependency_cache: false leaves a store that outlives the job alone
   assert.match(bad.stdout, /dependency_cache must be true or false/)
 })
 
-test("the Docker layer cache stays on a self-hosted runner unless the config names a backend", () => {
+test("runtime.build_cache is off unless asked for, and follows the dependency cache", () => {
+  const dir = scratch()
+  writeFileSync(join(dir, "package.json"), "{}")
+  writeFileSync(join(dir, "pnpm-lock.yaml"), "")
+  const run = (config, env = {}) => {
+    writeFileSync(join(dir, "pipeline.yaml"), config)
+    return runStep("guard", "config", { CWD: dir, CONFIG_FILE: "pipeline.yaml", ...env })
+  }
+  assert.equal(run(minimal).outputs["build-cache"], "false")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n`).outputs["build-cache"], "true")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: false\n`).outputs["build-cache"], "false")
+  const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n`, homelab).outputs["build-cache"], "false", "a runner that keeps its disk keeps its own")
+  assert.equal(run(`${minimal}runtime:\n  build_cache: true\n  dependency_cache: true\n`, homelab).outputs["build-cache"], "true")
+  const bad = run(`${minimal}runtime:\n  build_cache: yes please\n`)
+  assert.notEqual(bad.status, 0)
+  assert.match(bad.stdout, /build_cache must be true or false/)
+})
+
+test("the Docker layer cache is off on a hosted runner and local on a self-hosted one unless the config names a backend", () => {
   const homelab = { PIPELINE_RUNNER: '["self-hosted","mainz-homelab"]' }
   const backend = (config, env = {}) => parse(config, env).outputs["docker-cache-backend"]
-  assert.equal(backend(minimal), "gha", "hosted runners keep the GitHub cache")
+  assert.equal(backend(minimal), "none", "a release's cache scope is its tag, which no later release reads")
   assert.equal(backend(minimal, homelab), "local", "a homelab uplink does not carry every layer")
   assert.equal(backend(`${minimal}runner:\n  labels: [self-hosted, crewsy-unraid]\n`), "local")
   assert.equal(backend(`${minimal}deploy:\n  docker:\n    cache_backend: gha\n`, homelab), "gha", "an explicit backend wins")
@@ -295,4 +314,82 @@ test("the v2 blocks deployment: and pipeline: are still refused", () => {
     assert.match(r.stdout + r.stderr, new RegExp(`::error::.*${key}`), key)
     assert.doesNotMatch(r.stdout + r.stderr, /belong to/, "the message says what to do, not who owns releases")
   }
+})
+
+// --- test.pr_command: the switch for the two depths of Check -----------------
+
+test("test.pr_command is encoded like the other commands and switches fast mode on", () => {
+  const r = parse(`version: '3'\ntest:\n  command: pnpm test\n  pr_command: pnpm test:affected\n`)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(command(r.outputs, "test-pr-command"), "pnpm test:affected")
+  assert.equal(command(r.outputs, "test-command"), "pnpm test", "the full command is untouched")
+  assert.equal(r.outputs["fast-mode"], "true")
+  assert.equal(r.outputs["test-pr-command"], undefined, "never in plaintext")
+  const block = parse(`version: '3'\ntest:\n  pr_command: |\n    pnpm test:unit\n    pnpm test:smoke\n`)
+  assert.equal(command(block.outputs, "test-pr-command"), "pnpm test:unit\npnpm test:smoke")
+  assert.equal(block.outputs["fast-mode"], "true", "fast mode needs no test.command")
+})
+
+test("without test.pr_command fast mode is off and the command is empty", () => {
+  for (const config of [
+    minimal,
+    `version: '3'\ntest:\n  command: pnpm test\n`,
+    `version: '3'\ntest:\n  pr_command: ''\n`,
+    `version: '3'\ntest:\n  pr_command: "  "\n`,
+    `version: '3'\ntest:\n  pr_command:\n`,
+    `version: '3'\ntest:\n  pr_command: null\n`,
+  ]) {
+    const r = parse(config)
+    assert.equal(r.status, 0, `${JSON.stringify(config)}: ${r.stderr}`)
+    assert.equal(r.outputs["fast-mode"], "false", JSON.stringify(config))
+    assert.equal(command(r.outputs, "test-pr-command"), "", JSON.stringify(config))
+  }
+})
+
+test("a test.pr_command that is not a string is a configuration error", () => {
+  for (const value of ["true", "3", "[pnpm, test]", "{run: pnpm test}"]) {
+    const r = parse(`version: '3'\ntest:\n  pr_command: ${value}\n`)
+    assert.equal(r.status, 1, value)
+    assert.match(r.stdout, /::error::pipeline\.yaml: test\.pr_command must be a string/, value)
+    assert.equal(r.outputs["fast-mode"], undefined, `no mode from a bad value: ${value}`)
+  }
+})
+
+test("test.pr_command adds two outputs and changes no other", () => {
+  // The outputs a config without it produced before the depths existed, in
+  // the order the step writes them. A repository that does not opt in gets
+  // these, byte for byte, plus an empty command and fast-mode=false.
+  const before = [
+    "stack", "node-version", "python-version", "package-manager", "runner", "cache", "dependency-cache", "build-cache",
+    "pnpm-version", "security", "trufflehog", "dependency-review", "fail-on-secrets", "fail-on-vulnerabilities", "lint",
+    "lint-command-b64", "test", "test-command-b64", "test-artifact-path", "build", "build-command-b64", "artifact-path",
+    "deploy-provider", "deploy-targets", "primary-target", "vercel-scope", "vercel-preview-alias",
+    "vercel-build-command-b64", "cloudflare-config", "cloudflare-build-command-b64", "docker-cache-backend", "render-hook",
+  ]
+  const added = ["test-pr-command-b64", "fast-mode"]
+  const config = `version: '3'
+stack: nodejs
+runtime:
+  node_version: 24.1.0
+lint:
+  command: pnpm lint
+test:
+  command: pnpm test
+  artifact_path: test-results
+build:
+  command: pnpm build
+deploy:
+  provider: vercel
+  vercel:
+    scope: team
+`
+  const without = parse(config)
+  assert.equal(without.status, 0, without.stderr)
+  assert.deepEqual(Object.keys(without.outputs).filter((k) => !added.includes(k)), before)
+  assert.deepEqual(Object.keys(without.outputs).filter((k) => added.includes(k)), added)
+  const withIt = parse(config.replace("  command: pnpm test\n", "  command: pnpm test\n  pr_command: pnpm test:fast\n"))
+  assert.equal(withIt.status, 0, withIt.stderr)
+  assert.notEqual(withIt.outputs["test-pr-command-b64"], without.outputs["test-pr-command-b64"])
+  for (const key of before) assert.equal(withIt.outputs[key], without.outputs[key], key)
+  assert.equal(without.stdout, withIt.stdout, "the step's log line is the same")
 })

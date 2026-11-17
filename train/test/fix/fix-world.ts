@@ -25,6 +25,8 @@ export interface FakeJob {
   id: number
   name: string
   conclusion: string | null
+  /** As the jobs API lists them; absent, the job names no step. */
+  steps?: { name: string; conclusion: string | null }[]
 }
 
 export interface FakeComment {
@@ -41,6 +43,17 @@ export interface PullExtras {
 }
 
 export const CHECK = "pipeline / Check"
+
+/** The Check job's steps as the jobs API reports a failure in `name`: green before it, skipped after. */
+export function stepsFailingAt(name: string): NonNullable<FakeJob["steps"]> {
+  return [
+    { name: "Set up job", conclusion: "success" },
+    { name: "Checkout", conclusion: "success" },
+    { name, conclusion: "failure" },
+    { name: "Mark the checked tree", conclusion: "skipped" },
+    { name: "Complete job", conclusion: "success" },
+  ]
+}
 
 export class FixWorld {
   readonly gh: FakeGitHub
@@ -126,14 +139,17 @@ export class FixWorld {
     return { pull, headSha }
   }
 
-  /** A finished Pipeline run on `headSha`: Guard green, Check as given. */
+  /**
+   * A finished Pipeline run on `headSha`: Guard green, Check failed — in the
+   * step `failedStep` when given, in none the API names otherwise.
+   */
   run(
     id: number,
     headSha: string,
     branch: string,
-    over: Partial<FakeRun> & { jobs?: FakeJob[]; log?: string } = {},
+    over: Partial<FakeRun> & { jobs?: FakeJob[]; log?: string; failedStep?: string } = {},
   ): number {
-    const { jobs, log, ...run } = over
+    const { jobs, log, failedStep, ...run } = over
     this.runs.set(id, {
       event: "pull_request",
       conclusion: "failure",
@@ -147,7 +163,12 @@ export class FixWorld {
       id,
       jobs ?? [
         { id: id * 10 + 1, name: "pipeline / Guard", conclusion: "success" },
-        { id: id * 10 + 2, name: CHECK, conclusion: "failure" },
+        {
+          id: id * 10 + 2,
+          name: CHECK,
+          conclusion: "failure",
+          ...(failedStep === undefined ? {} : { steps: stepsFailingAt(failedStep) }),
+        },
       ],
     )
     this.logs.set(id * 10 + 2, log ?? "line one\nError: expected 1 to be 2\n")

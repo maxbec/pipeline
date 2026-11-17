@@ -13,7 +13,7 @@ ADR 0003/0004/0009 and 0026–0028). Flaiky's runtime is retired.
 ## 2. Structure
 
 ```
-.github/workflows/universal-pipeline.yaml   the three jobs; all logic is inline `run:` blocks
+.github/workflows/universal-pipeline.yaml   the three jobs and the recheck; all logic is inline `run:` blocks
 .github/workflows/examples/caller.yaml      the caller every repository carries (rendered by train/bin/migrate-repos.ts)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
 .github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge) and the three Fix jobs, all running train/bin
@@ -29,13 +29,16 @@ docs/CONFIGURATION.md                       the v3 config reference
 scripts/                                    repo bootstrap and org maintenance helpers
 ```
 
-## 3. The three jobs
+## 3. The three jobs, and the recheck
 
-- **Guard** (`ubuntu-latest`, always). Sparse-checks out `.github/pipeline.yaml`
+- **Guard** (`ubuntu-slim`, always). Sparse-checks out `.github/pipeline.yaml`
   and the toolchain files, parses them into outputs for the other jobs (step
   id `config`), and on a pull request enforces (step id `rules`): a conventional
   title `type(scope)!: summary`; PRs into `main` only from `dev`, `promote/*`,
   `hotfix/*`, `release/*` when a `dev` branch exists; no fork PRs into `main`.
+  It also names the depth of the Check (step id `depth`: fast or full, see
+  "Two depths of Check" in `docs/CONFIGURATION.md`), decides whether an earlier
+  result stands (`tree`, `reuse`) and names the tree marker (`marker`).
 - **Check** (`needs: guard`, not on release events). On the configured runner:
   TruffleHog binary over the commit range, dependency review (public repos),
   Node/Python setup, install, lint (Trunk when `.trunk/trunk.yaml` exists),
@@ -46,6 +49,11 @@ scripts/                                    repo bootstrap and org maintenance h
   otherwise). Checks out `maxbec/pipeline` at `job.workflow_sha` into
   `.pipeline/` and runs the provider actions from there — the same commit the
   caller pinned, no moving tags. Prerelease → `preview`, stable → `production`.
+- **Recheck Release PR** (`needs: [guard, check]`, `ubuntu-slim`). Starts only
+  after a green full Check on a `workflow_dispatch` or `schedule` in a
+  repository that sets `test.pr_command`, and re-runs the failed Pipeline run
+  of the Release PR onto that branch. The only job with `actions: write`; it
+  checks nothing out and never fails the workflow.
 
 ## 4. Conventions that must hold
 
@@ -56,10 +64,13 @@ scripts/                                    repo bootstrap and org maintenance h
    extract them by id; keep the ids.
 3. **Booleans in the config are read raw** (`bool()` in the config step): jq's
    `//` would turn an explicit `false` into the default.
-4. **Exactly three jobs, named `Guard`, `Check`, `Deploy`,** in the universal
-   pipeline; the train is a workflow of its own. The caller's job id
-   is `pipeline`. Renaming any of these changes the required check context in
-   every branch protection and ruleset.
+4. **Three jobs named `Guard`, `Check`, `Deploy`, plus `Recheck Release PR`,**
+   in the universal pipeline; the train is a workflow of its own. The caller's
+   job id is `pipeline`. Renaming any of these changes the required check
+   context in every branch protection and ruleset. Check never holds
+   `actions: write`: it runs the repository's code beside the checkout's
+   token. What needs that permission goes into the recheck, which executes
+   nothing from the repository.
 5. **The pipeline never talks to Infisical.** Credentials arrive as GitHub
    secrets, pushed by Infisical's Secret Sync; app env for a Vercel build
    comes from `vercel pull`. Check holds no deploy credential.

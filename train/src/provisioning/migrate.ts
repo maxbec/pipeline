@@ -288,7 +288,8 @@ export interface PipelineConfig {
   runtime?: { node_version?: string; python_version?: string }
   security?: Record<string, boolean>
   lint?: { enable?: boolean; command?: string }
-  test?: { enable?: boolean; command?: string }
+  /** `pr_command`, when set, is what pull requests and pushes run instead of `command`: the fast Check. */
+  test?: { enable?: boolean; command?: string; pr_command?: string }
   build?: { enable?: boolean; command?: string; artifact_path?: string }
   deploy: {
     provider: string
@@ -425,12 +426,66 @@ function finish(text: string, what: string): string {
   return text.endsWith("\n") ? text : `${text}\n`
 }
 
+/**
+ * The lines with the block between two marker lines kept or taken out; the
+ * marker lines go either way. Null when the template has neither marker.
+ */
+function cutBlock(
+  lines: string[],
+  [beginMarker, endMarker]: readonly [string, string],
+  keep: boolean,
+  what: string,
+): string[] | null {
+  const at = (marker: string) => lines.flatMap((line, i) => (line.trim() === marker ? [i] : []))
+  const begins = at(beginMarker)
+  const ends = at(endMarker)
+  if (begins.length === 0 && ends.length === 0) return null
+  const [begin] = begins
+  const [end] = ends
+  const paired = begins.length === 1 && ends.length === 1
+  if (!paired || begin === undefined || end === undefined || end < begin) {
+    throw new Error(
+      `the ${what} needs exactly one ${beginMarker} line and one ${endMarker} line after it`,
+    )
+  }
+  return [
+    ...lines.slice(0, begin),
+    ...(keep ? lines.slice(begin + 1, end) : []),
+    ...lines.slice(end + 1),
+  ]
+}
+
+const NIGHTLY_MARKERS = ["# __NIGHTLY_BEGIN__", "# __NIGHTLY_END__"] as const
+
+/** Whether the repository has a fast Check — and so a full one that only a dispatch or the night runs. */
+export function hasFastCheck(config: Pick<PipelineConfig, "test">): boolean {
+  const command = config.test?.pr_command
+  return typeof command === "string" && command.trim() !== ""
+}
+
+/**
+ * The Pipeline caller at the pin. `nightly` keeps the schedule block between
+ * the template's two marker lines — the nightly full Check, for a repository
+ * whose pull requests and pushes run the fast one; otherwise the block goes.
+ * A template from before the markers has no such block and is rendered as it
+ * is: the pipeline at that pin knows no depth.
+ */
 export function renderCaller(
   template: string,
   pin: PipelinePin,
   override: Pick<RepoOverride, "secrets">,
+  nightly = false,
 ): string {
-  let text = fillPin(template, pin, "caller")
+  const filled = fillPin(template, pin, "caller")
+  const cut = cutBlock(
+    filled.split("\n"),
+    NIGHTLY_MARKERS,
+    nightly,
+    "caller template's nightly block",
+  )
+  let text = cut === null ? filled : cut.join("\n")
+  if (text.includes("__NIGHTLY_"))
+    throw new Error("the caller template names a nightly marker outside its two marker lines")
   for (const [name, value] of Object.entries(override.secrets ?? {})) {
     const re = new RegExp(`^([ \\t]*)${name}: .*$`, "m")
     if (!re.test(text)) throw new Error(`secret ${name} is not forwarded by the caller template`)
@@ -454,15 +509,14 @@ export function renderTrainCaller(
   schedule: "keep" | "drop",
 ): string {
   const lines = fillPin(template, pin, "Train caller").split("\n")
-  const begin = lines.findIndex((line) => line.trim() === SCHEDULE_BEGIN)
-  const end = lines.findIndex((line) => line.trim() === SCHEDULE_END)
-  if (begin < 0 || end < begin)
+  const kept = cutBlock(
+    lines,
+    [SCHEDULE_BEGIN, SCHEDULE_END],
+    schedule === "keep",
+    "Train caller template's schedule block",
+  )
+  if (kept === null)
     throw new Error("the Train caller template has no schedule block between its two markers")
-  const kept = [
-    ...lines.slice(0, begin),
-    ...(schedule === "keep" ? lines.slice(begin + 1, end) : []),
-    ...lines.slice(end + 1),
-  ]
   const text = kept.join("\n")
   if (text.includes("__TRAIN_SCHEDULE_"))
     throw new Error("the Train caller template repeats a schedule marker")
@@ -750,15 +804,16 @@ export function planRepository(repository: Repository, facts: RepoFacts, ctx: Pl
   const override = overrideFor(ctx, repository)
 
   const desired = new Map<string, string>()
+  const config = convertConfig(facts.read(CONFIG_PATH), {
+    renderHook: override.renderHook,
+    hostedRunner: !facts.private,
+    singleQuote: prefersSingleQuotes(facts.read(TRUNK_CONFIG_PATH), ctx.singleQuoteTrunkPlugins),
+  })
+  desired.set(CONFIG_PATH, config.text)
   desired.set(
-    CONFIG_PATH,
-    convertConfig(facts.read(CONFIG_PATH), {
-      renderHook: override.renderHook,
-      hostedRunner: !facts.private,
-      singleQuote: prefersSingleQuotes(facts.read(TRUNK_CONFIG_PATH), ctx.singleQuoteTrunkPlugins),
-    }).text,
+    CALLER_PATH,
+    renderCaller(ctx.template, ctx.pin, override, hasFastCheck(config.parsed)),
   )
-  desired.set(CALLER_PATH, renderCaller(ctx.template, ctx.pin, override))
   if (ctx.train?.mode === "render") {
     desired.set(
       TRAIN_CALLER_PATH,

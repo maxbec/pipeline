@@ -7,11 +7,28 @@ import { runStep, scratch } from "./helpers.mjs"
 // A fake `gh` that answers the calls the step makes: the compare of the green
 // commit and the head, the push runs of the green commit and, for a promotion,
 // the commits it reads trees and parents from. `--jq` is applied with real jq,
-// and every path asked for is appended to `calls`.
-function fakeGh({ compare, runs, commits = {}, failCompare = false, failRuns = false, failCommits = false }) {
+// and every path asked for is appended to `calls`. In fast mode a Release PR
+// also asks for the marker artifacts of a tree (`markers`, by artifact name)
+// and for each marker's run (`markerRuns`, by run id).
+function fakeGh({
+  compare,
+  runs,
+  commits = {},
+  markers = {},
+  markerRuns = {},
+  failCompare = false,
+  failRuns = false,
+  failCommits = false,
+  failArtifacts = false,
+}) {
   const dir = scratch("gh-")
   writeFileSync(join(dir, "compare.json"), JSON.stringify(compare))
   writeFileSync(join(dir, "runs.json"), JSON.stringify({ workflow_runs: runs }))
+  writeFileSync(join(dir, "no-artifacts.json"), JSON.stringify({ total_count: 0, artifacts: [] }))
+  for (const [name, artifacts] of Object.entries(markers)) {
+    writeFileSync(join(dir, `artifacts-${name}.json`), JSON.stringify({ total_count: artifacts.length, artifacts }))
+  }
+  for (const [id, run] of Object.entries(markerRuns)) writeFileSync(join(dir, `run-${id}.json`), JSON.stringify(run))
   for (const [sha, commit] of Object.entries(commits)) writeFileSync(join(dir, `commit-${sha}.json`), JSON.stringify(commit))
   writeFileSync(
     join(dir, "gh"),
@@ -20,6 +37,12 @@ path="$2"
 echo "$path" >> "${dir}/calls"
 case "$path" in
   */compare/*) ${failCompare ? "exit 1" : `cat "${dir}/compare.json"`} ;;
+  */actions/artifacts\\?name=*)
+    ${failArtifacts ? "exit 1" : "true"}
+    name="\${path#*name=}"; name="\${name%%&*}"
+    f="${dir}/artifacts-$name.json"; [[ -f "$f" ]] || f="${dir}/no-artifacts.json"
+    jq -r "$4" "$f" ;;
+  */actions/runs/*) f="${dir}/run-\${path##*/}.json"; [[ -f "$f" ]] || exit 1; jq -r "$4" "$f" ;;
   */actions/runs*) ${failRuns ? "exit 1" : `jq "$4" "${dir}/runs.json"`} ;;
   */git/commits/*) ${failCommits ? "exit 1" : `jq -r "$4" "${dir}/commit-\${path##*/}.json"`} ;;
   *) exit 2 ;;
@@ -37,7 +60,7 @@ const versionBump = { filename: "package.json", status: "modified", patch: patch
 const changelog = { filename: "CHANGELOG.md", status: "modified", patch: "@@ -1 +1,4 @@\n+## 0.35.0-beta.1\n+\n+- feat: x\n # Changelog" }
 const greenRun = { path: ".github/workflows/ci.yaml", conclusion: "success" }
 
-function reuse({ title = "chore(release): 0.35.0-beta.1", headRepo = "o/r", headRef = "release/dev", baseRef = "dev", ...gh } = {}) {
+function reuse({ title = "chore(release): 0.35.0-beta.1", headRepo = "o/r", headRef = "release/dev", baseRef = "dev", env = {}, ...gh } = {}) {
   const dir = fakeGh({ compare: releaseCompare([versionBump, changelog]), runs: [greenRun], ...gh })
   const r = runStep("guard", "reuse", {
     PATH: `${dir}:${process.env.PATH}`,
@@ -50,6 +73,7 @@ function reuse({ title = "chore(release): 0.35.0-beta.1", headRepo = "o/r", head
     BASE_SHA: "b".repeat(40),
     HEAD_SHA: HEAD,
     MERGE_SHA: MERGE,
+    ...env,
   })
   assert.equal(r.status, 0, `the step never fails the run: ${r.stdout}${r.stderr}`)
   r.calls = existsSync(join(dir, "calls")) ? readFileSync(join(dir, "calls"), "utf8").trim().split("\n") : []
@@ -178,4 +202,131 @@ test("a diff the compare API may have cut short runs the full Check", () => {
   const r = reuse({ compare: releaseCompare(many) })
   assert.equal(r.outputs.reuse, "false")
   assert.match(r.stdout, /at most 300 files/)
+})
+
+// --- fast mode: a Release PR stands on the full Check of its base tip ---------
+//
+// With test.pr_command set, the base's push run is a fast Check. A release
+// must not stand on it: the tree of the base tip needs a full marker.
+
+const BASE = "b".repeat(40)
+const BASE_TREE = "7".repeat(40)
+const FULL = `pipeline-checked-tree-${BASE_TREE}`
+const FAST = `pipeline-fast-tree-${BASE_TREE}`
+const baseCommit = { [BASE]: { tree: { sha: BASE_TREE }, parents: [{ sha: "9".repeat(40) }] } }
+const artifact = (runId, { expired = false, repo = 1, headRepo = 1 } = {}) => ({
+  expired,
+  workflow_run: { id: runId, repository_id: repo, head_repository_id: headRepo },
+})
+const ciRun = { path: ".github/workflows/ci.yaml" }
+const fastMode = (over = {}) => reuse({ commits: baseCommit, env: { FAST_MODE: "true" }, ...over })
+
+test("fast mode: a Release PR over a base tip with a full marker reuses that full Check", () => {
+  const r = fastMode({ markers: { [FULL]: [artifact(41)] }, markerRuns: { 41: ciRun } })
+  assert.equal(r.outputs.reuse, "true")
+  assert.equal(r.outputs.unverified, undefined)
+  assert.equal(r.outputs["base-sha"], BASE)
+  assert.equal(
+    r.outputs.note,
+    "The full Check passed on dev at bbbbbbb (tree 7777777, run 41); this head adds only the version and the changelog, so that result stands.",
+  )
+  assert.ok(r.calls.some((c) => c.includes(`/git/commits/${BASE}`)), "the tree is the base tip's")
+  assert.ok(r.calls.some((c) => c.includes(`artifacts?name=${FULL}&`)))
+  assert.ok(!r.calls.some((c) => c.includes("actions/runs?head_sha=")), "the push run is not what a release stands on")
+})
+
+test("fast mode: a green push run alone leaves the Release PR unverified", () => {
+  const r = fastMode({ runs: [greenRun] })
+  assert.equal(r.outputs.unverified, "true")
+  assert.equal(r.outputs.reuse, "false", "unverified is never a reuse")
+  assert.equal(r.outputs["unverified-note"], "dev at bbbbbbb (tree 7777777) has not passed the full Check")
+  assert.equal(r.outputs.note, undefined)
+  assert.equal(r.outputs["base-sha"], undefined)
+})
+
+test("fast mode: a fast marker of the base tip does not verify a release", () => {
+  const r = fastMode({ markers: { [FAST]: [artifact(41)] }, markerRuns: { 41: ciRun } })
+  assert.equal(r.outputs.unverified, "true")
+  assert.ok(!r.calls.some((c) => c.includes("pipeline-fast-tree")), "the fast name is never asked for")
+})
+
+test("fast mode: only a live full marker from this repository's own pipeline verifies a release", () => {
+  const cases = {
+    "a fork's pull request uploaded it": { markers: { [FULL]: [artifact(41, { headRepo: 2 })] }, markerRuns: { 41: ciRun } },
+    "it expired": { markers: { [FULL]: [artifact(41, { expired: true })] }, markerRuns: { 41: ciRun } },
+    "another workflow uploaded it": { markers: { [FULL]: [artifact(41)] }, markerRuns: { 41: { path: ".github/workflows/other.yaml" } } },
+    "its run is gone": { markers: { [FULL]: [artifact(41)] }, markerRuns: {} },
+    "it carries no run": { markers: { [FULL]: [{ expired: false, workflow_run: null }] } },
+    "it marks another tree": { markers: { [`pipeline-checked-tree-${"8".repeat(40)}`]: [artifact(41)] }, markerRuns: { 41: ciRun } },
+  }
+  for (const [why, gh] of Object.entries(cases)) {
+    const r = fastMode(gh)
+    assert.equal(r.outputs.unverified, "true", why)
+    assert.equal(r.outputs.reuse, "false", why)
+  }
+  const mixed = fastMode({ markers: { [FULL]: [artifact(40, { headRepo: 2 }), artifact(41)] }, markerRuns: { 40: ciRun, 41: ciRun } })
+  assert.equal(mixed.outputs.reuse, "true", "one good marker among bad ones is enough")
+})
+
+test("fast mode: an API that does not answer the marker lookup fails closed, as unverified", () => {
+  const good = { markers: { [FULL]: [artifact(41)] }, markerRuns: { 41: ciRun } }
+  const noTree = fastMode({ ...good, failCommits: true })
+  assert.equal(noTree.outputs.unverified, "true")
+  assert.match(noTree.outputs["unverified-note"], /the commits API did not answer/)
+  const noArtifacts = fastMode({ ...good, failArtifacts: true })
+  assert.equal(noArtifacts.outputs.unverified, "true")
+  assert.match(noArtifacts.outputs["unverified-note"], /the artifacts API did not answer/)
+  const badTree = fastMode({ ...good, commits: { [BASE]: { tree: { sha: "nope" } } } })
+  assert.equal(badTree.outputs.unverified, "true")
+})
+
+test("fast mode: a Release PR that is more than its base plus a version is checked itself, not unverified", () => {
+  const good = { markers: { [FULL]: [artifact(41)] }, markerRuns: { 41: ciRun } }
+  const code = { filename: "src/index.ts", status: "modified", patch: patch([["  a()", "  b()"]]) }
+  const cases = {
+    "it carries code": { compare: releaseCompare([versionBump, code]) },
+    "it is two commits over the base": { compare: { status: "ahead", ahead_by: 2, behind_by: 0, files: [versionBump] } },
+    "the base moved on": { compare: { status: "diverged", ahead_by: 1, behind_by: 1, files: [versionBump] } },
+    "the title names no version": { title: "feat: x" },
+    "the head lives in a fork": { headRepo: "fork/r" },
+    "the compare API did not answer": { failCompare: true },
+  }
+  for (const [why, over] of Object.entries(cases)) {
+    const r = fastMode({ ...good, ...over })
+    // Guard's depth step makes that Check a full one for every release/* head.
+    assert.equal(r.outputs.reuse, "false", why)
+    assert.equal(r.outputs.unverified, undefined, why)
+    assert.ok(!r.calls.some((c) => c.includes("actions/artifacts")), `no marker is asked for: ${why}`)
+  }
+})
+
+test("fast mode: the promotion rule is unchanged and stands on the push run of the Release it promotes", () => {
+  const stable = { filename: "package.json", status: "modified", patch: patch([['  "version": "0.35.0-beta.1",', '  "version": "0.35.0",']]) }
+  const r = promotion({ compare: releaseCompare([stable, changelog]), env: { FAST_MODE: "true" } })
+  assert.equal(r.outputs.reuse, "true")
+  assert.equal(r.outputs.unverified, undefined)
+  assert.equal(r.outputs["base-sha"], RELEASE)
+  assert.match(r.outputs.note, /^Lint, test and build passed on the promoted Release at ddddddd; /)
+  assert.ok(!r.calls.some((c) => c.includes("actions/artifacts")), "no marker is asked for")
+  const never = promotion({ runs: [], env: { FAST_MODE: "true" } })
+  assert.equal(never.outputs.reuse, "false")
+  assert.equal(never.outputs.unverified, undefined, "a promotion is checked (in full: Guard's depth step), never unverified")
+})
+
+test("without test.pr_command a Release PR stands on its base's green push run, exactly as before", () => {
+  for (const env of [{}, { FAST_MODE: "false" }, { FAST_MODE: "" }]) {
+    const why = JSON.stringify(env)
+    const r = reuse({ env })
+    assert.equal(r.outputs.reuse, "true", why)
+    assert.deepEqual(Object.keys(r.outputs).sort(), ["base-sha", "note", "reuse"], why)
+    assert.equal(
+      r.outputs.note,
+      "Lint, test and build passed on dev at bbbbbbb; this head adds only the version and the changelog, so that result stands.",
+      why,
+    )
+    assert.equal(r.calls.length, 2, `the compare and the push runs, nothing else: ${why}`)
+    assert.ok(r.calls[0].includes("/compare/") && r.calls[1].includes("actions/runs?head_sha="), why)
+    const red = reuse({ runs: [], env })
+    assert.deepEqual(red.outputs, { reuse: "false" }, why)
+  }
 })

@@ -14,7 +14,8 @@ stack: auto # nodejs | python | none | auto
 runtime:
   node_version: '' # default: .nvmrc, then .node-version, then package.json engines.node, then lts/*
   python_version: '3.12'
-  dependency_cache: true # default: true on a GitHub-hosted runner, false when the runner labels contain self-hosted (its package store outlives the job, and saving the cache uploads gigabytes over the runner's own uplink). Also switches trunk's cache
+  dependency_cache: true # default: true on a GitHub-hosted runner, false when the runner labels contain self-hosted (its package store outlives the job, and saving the cache uploads gigabytes over the runner's own uplink). Restored on every run, saved only by a push to dev/main: a pull request reads its base branch's copy and stores none of its own. Also switches trunk's cache
+  build_cache: false # true: Check restores ~/.cache/pipeline-build-cache on every run and saves it after Build on every run but a pull request's, so a push to dev/main and the full Check by dispatch or by night (a new entry per run, keyed by OS, Node and lockfile, falling back to the newest older one). The path is exported as PIPELINE_BUILD_CACHE_DIR; point a task runner's cache there (turbo: TURBO_CACHE_DIR). The repository decides what is in it and proves that replaying it is safe. Off whenever dependency_cache is
 
 runner:
   labels: [] # default: vars.PIPELINE_RUNNER if set on the repository or org, else ubuntu-latest
@@ -33,6 +34,7 @@ lint:
 test:
   enable: true
   command: '' # default: `<pm> test` if the script exists; python: `pytest` when tests/ exists
+  pr_command: '' # optional: what a fast Check runs instead of `command`. Setting it switches the two depths on, see "Two depths of Check"
   artifact_path: '' # optional: uploaded as test-artifacts-<run>-<attempt> for 7 days, only when the tests fail
 
 build:
@@ -50,7 +52,7 @@ deploy:
     config: wrangler.toml
     build_command: ''
   docker:
-    cache_backend: gha # gha | local | none. Default: gha on a GitHub-hosted runner, local (the runner's work volume, /_work/.buildx-cache) when the runner labels contain self-hosted
+    cache_backend: none # gha | local | none. Default: none on a GitHub-hosted runner (Deploy runs on a release event, whose cache scope is the new tag: the next release cannot read what this one wrote), local (the runner's work volume, /_work/.buildx-cache) when the runner labels contain self-hosted
     images: # one Deploy leg per image
       - name: default # default or app → ghcr.io/<owner>/<repo>; any other name → <repo>-<name>
         dockerfile: Dockerfile
@@ -72,10 +74,92 @@ release: # optional; read by the Train workflow, validated by Guard
 
 | job | reads | runs on |
 |---|---|---|
-| Guard | everything above; on pull requests also the PR title and branches | ubuntu-latest |
-| Check | `security`, `lint`, `test`, `build`, `runtime`, `stack` | `runner.labels` |
+| Guard | everything above; on pull requests also the PR title and branches | ubuntu-slim (one core, GitHub-hosted) |
+| Check | `security`, `lint`, `test`, `build`, `runtime`, `stack` | `runner.labels`; ubuntu-slim when it only reports an earlier result or "not fully verified" |
+| Recheck Release PR | nothing but Guard's answers (`test.pr_command` set, depth full) | ubuntu-slim |
 | Deploy | `deploy`, `runtime`, `stack` | `runner.labels` |
-| Train (second workflow) | `release` | `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-latest |
+| Train (second workflow) | `release` | Train, Fix (triage) and Fix (commit): `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-slim. Fix (propose): always ubuntu-latest |
+
+The pipeline has four jobs. Guard runs every time. Check runs on everything but
+a release, Deploy only on a published release. The fourth, **Recheck Release
+PR**, starts only after a green full Check on a `workflow_dispatch` or a
+`schedule` in a repository that sets `test.pr_command`; on a pull request, on a
+push and in every other repository it is skipped, so it starts no runner and
+costs nothing. What it does is under "Two depths of Check".
+
+## Two depths of Check
+
+Without `test.pr_command` nothing here applies: every Check runs
+`test.command`, as it always did.
+
+A repository that sets `test.pr_command` gets two depths. **Fast** runs lint,
+the `pr_command` and build. **Full** runs lint, `test.command` and build. The
+`pr_command` is whatever the repository can answer for on every pull request:
+the unit tests, the tests of the packages a change touches. `test.command`
+stays the whole suite.
+
+| run | depth | test command |
+|---|---|---|
+| pull request, any head but `hotfix/*`, `release/*` and `promote/*` | fast | `test.pr_command` |
+| push to `dev` / `main` | fast | `test.pr_command` |
+| pull request from `hotfix/*` | full | `test.command` |
+| `workflow_dispatch`, `schedule` | full | `test.command` |
+| Release PR (`release/*` head) | none of its own: green only when the tip of its base branch has passed the full Check, otherwise red at once as "not fully verified" | |
+| promotion (`promote/*` head) | none of its own, as before: it stands on the green push run of the Release it promotes | |
+
+So **a Release PR is green only when the tip of its base branch has passed the
+full Check.** A Release PR that is more than its base tip plus a version (a
+commit by hand, a base that moved on) is checked itself, in full. So is a
+promotion that cannot stand on the Release it promotes, because the base has
+commits of its own: what goes to production never goes green on the fast suite.
+
+**`PIPELINE_DEPTH`** is `fast` or `full` in the environment of the Lint, Test
+and Build steps, for the repository's own scripts (a build that skips an
+expensive target on a pull request, say). It is `full` in a repository without
+a `pr_command`, and unset under a pin older than the depths: read unset as
+`full`.
+
+**Markers.** A passing Check leaves an artifact named after its tree and its
+depth: `pipeline-checked-tree-<tree>` after a full Check,
+`pipeline-fast-tree-<tree>` after a fast one. The first is the only name
+there was before, so older markers count as full. A full run stands down only
+for a full marker, a fast run for either. A Release PR that stood on its
+base's full marker leaves the fast name for its own tree, and so does a
+promotion that stood on the Release it promotes.
+
+**Starting a full run.** The caller listens for `workflow_dispatch`, and where
+`test.pr_command` is set also for a nightly `schedule` (`23 2 * * *`, on the
+default branch):
+
+```sh
+gh workflow run ci.yaml --ref dev -R <owner>/<repo>
+```
+
+It runs the full Check on the tip of that branch, or takes seconds when that
+tree already carries a full marker. Lint is the one step that is no wider
+there: where Trunk lints, such a run checks what the tip commit brought, the
+range its push Check linted, and never the whole repository (the Trunk
+action's `all` mode would fail on every issue older than Trunk). When it is green, the job **Recheck
+Release PR** looks for the open Release PR onto that branch (a `release/*`
+head from this repository) and, if the newest Pipeline run of its head
+concluded `failure`, re-runs all jobs of that run, so Guard answers again and
+the Release PR turns green without anyone clicking. The job runs on
+ubuntu-slim with `actions: write` and `pull-requests: read`, checks nothing
+out and never fails the run: an API that refuses is a notice that names the
+run to re-run by hand. It is a job of its own because Check runs the
+repository's code and must not hold `actions: write`. The caller has to grant
+`actions: write` for it (the rendered caller does): a called workflow may not
+ask for more than its caller grants, and one that does fails to start.
+
+**A red Release PR, "Not fully verified".** The tip of the base branch has no
+full marker yet: nobody ran the full Check on it since the last merge, or the
+nightly run has not come round. The Check fails within seconds, on the
+one-core runner, without running anything, and its error names the command
+above. Run it; once it is green, Recheck Release PR re-runs the Release PR's
+Pipeline run. By hand, re-run **all jobs** of that run (`gh run rerun <id>`):
+re-running only the failed Check repeats Guard's old answer. The same error
+with "the … API did not answer" means Guard could not look; re-running all
+jobs is enough.
 
 ## `release:`
 
@@ -134,7 +218,7 @@ runs two steps over the whole repository — the event is only a poke:
 |---|---|
 | `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. A red pull request run starts the Fix, below; cancelled and release runs start nothing |
 | `workflow_dispatch` | after resolving review threads or removing a label without a push: `gh workflow run train.yaml` |
-| `schedule`, every 30 minutes | what no event reports. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
+| `schedule`, four times a day (`17 */6 * * *`) | what no event reports: every finished Pipeline run starts the train already. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
 
 There is deliberately no `pull_request` trigger: it would run the pull
 request's own copy of the caller with the secrets. All three triggers above run
@@ -157,8 +241,50 @@ Controls:
   caller can be rolled out first. **`CLAUDE_CODE_OAUTH_TOKEN`** belongs to the
   Fix, below.
 
-The train runs on `vars.PIPELINE_RUNNER` in a private repository and always
-GitHub-hosted in a public one.
+The train runs on `vars.PIPELINE_RUNNER` in a private repository that sets
+it; otherwise, and always in a public one, on GitHub's one-core `ubuntu-slim`.
+
+### What becomes a release
+
+The version comes from the conventional titles merged since the last stable
+tag: breaking is a major, `feat` a minor, `fix`, `perf` and `revert` a patch
+(before 1.0 breaking and `feat` are both a minor). On `dev` of a repository
+that has `main` the Release PR carries `<target>-beta.N`, on `main` the stable
+`<target>`: the promotion of dev's last beta.
+
+Two rules decide whether there is a Release PR at all:
+
+- **A merge without impact after a release is not a release.** `chore`, `ci`,
+  `docs`, `test`, `refactor` and the like wait for the next `feat` or `fix`;
+  the train reports `nothing to release on dev since v…`.
+- **A release needs its own green `pipeline / Check`.** The Release PR is built
+  only over a base tip whose push run passed, and the promotion on `main`
+  waits for the Check on the commit of the beta it promotes. No other
+  commit's Check counts for it, and none is copied onto it.
+
+**A beta whose own Check is red is replaced, not repaired.** A beta can be cut
+while its Check is broken for that very commit: a caller pinned to a broken
+pipeline, a test that fails on exactly that tree. A rerun checks the same
+commit again, so the promotion would wait for good, while the repair on `dev`
+is a `chore(ci)` and by the first rule no release. The train therefore treats
+the last beta of `dev` as superseded when `pipeline / Check` on its commit ran
+to the end without passing (failed, timed out, cancelled) and `dev` has
+commits after it: they become the next beta of the same target
+(`1.3.0-beta.1` is followed by `1.3.0-beta.2`), whatever their type. That
+Release PR says which beta it replaces, waits for a green `dev` tip like any
+other, and is merged by a person; `main` then promotes the new beta on its
+own green Check. Until then the promotion reports the red Check together with
+this way out.
+
+A beta whose Check is green, still running, being rerun or only skipped (the
+release event's run) is not superseded, and the first rule holds. A rerun
+that turns the old beta green after all makes it promotable again; a
+replacement Release PR already open on `dev` then stays open and is the
+owner's to merge or close.
+
+`release_as` is no way around a red beta on `dev`: Guard admits only a stable
+`X.Y.Z` there, and in a repository that has `dev` the train gives a stable
+override to `main` alone.
 
 ### Fix
 
@@ -171,9 +297,13 @@ schedule, and not for a cancelled or timed-out run.
    fork, a draft, a head that has moved on since the run, a `release/*`,
    `promote/*`, `backmerge/*` or `hotfix/*` head, a Dependabot pull request,
    one labelled `hold` or `needs-human`, or a run whose failed job is Guard
-   (a wrong title or target is not something to patch). On the run's first
-   attempt it reruns the failed jobs once and stops.
-2. **Fix (propose)**, when the check is still red: Claude Code runs headless
+   (a wrong title or target is not something to patch). For the four head
+   prefixes the job does not start at all. On the run's first attempt it
+   reruns the failed jobs once and stops, unless the step of Check that
+   failed is `Lint`, `Lint (trunk)`, `Test` or `Build`: the same commit fails
+   those the same way, so they go to the proposal at once.
+2. **Fix (propose)**, when the check is still red after its rerun or failed
+   in one of those four steps: Claude Code runs headless
    on a checkout of the pull request's head, with the end of the failed job's
    log (300 lines, 40 KB at most). It can read, search and edit files in that
    checkout and nothing else: no shell, no network tool, no MCP server, and
@@ -217,7 +347,7 @@ ever weakened or switched off to get a pull request green.
 **`CLAUDE_CODE_OAUTH_TOKEN`**, a token from `claude setup-token`. The App needs
 `actions: write` (the rerun), `contents: write` (the commit) and
 `pull requests: write` and `issues: write` (comment and label). Without the
-Claude token a red check still gets its one rerun and nothing more. Do not set
+Claude token a red check gets at most its one rerun and nothing more. Do not set
 an `ANTHROPIC_API_KEY` for this workflow: Claude Code would use it instead.
 
 The token is tied to the Claude subscription of whoever created it. Every

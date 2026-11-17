@@ -1,5 +1,6 @@
 ---
-# The universal pipeline, slim (Flaiky Phase 10, D34 / D42). Three jobs:
+# The universal pipeline, slim (Flaiky Phase 10, D34 / D42). Three jobs, and
+# a fourth that most runs never start:
 #
 #   Guard   parses .github/pipeline.yaml (v3) once for the other two jobs and,
 #           on a pull request, enforces the branch rules and a conventional
@@ -11,6 +12,11 @@
 #   Deploy  only on a published GitHub release (ADR 0004): a prerelease deploys
 #           `preview`, a stable release deploys `production`, via OIDC. Pushes
 #           to dev or main never deploy. Flaiky publishes the release.
+#
+#   Recheck Release PR
+#           only after a green full Check on a dispatch or a schedule, in a
+#           repository that sets test.pr_command: re-runs the Pipeline run of
+#           the Release PR that waited for that Check. Skipped everywhere else.
 #
 # Callers pin this file by SHA and forward their secrets explicitly — org
 # secrets do not cross the owner boundary. Behaviour is configured only through
@@ -66,7 +72,10 @@ on:
 jobs:
   guard:
     name: Guard
-    runs-on: ubuntu-latest
+    # The one-core container runner: Guard reads a few files and asks the API,
+    # with bash, yq, jq, gh, git and python3, all of which that image carries.
+    # It has no Docker and a 15-minute limit, neither of which Guard comes near.
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -79,6 +88,7 @@ jobs:
       pnpm-version: ${{ steps.config.outputs.pnpm-version }}
       cache: ${{ steps.config.outputs.cache }}
       dependency-cache: ${{ steps.config.outputs.dependency-cache }}
+      build-cache: ${{ steps.config.outputs.build-cache }}
       python-version: ${{ steps.config.outputs.python-version }}
       runner: ${{ steps.config.outputs.runner }}
       security: ${{ steps.config.outputs.security }}
@@ -90,6 +100,13 @@ jobs:
       lint-command-b64: ${{ steps.config.outputs.lint-command-b64 }}
       test: ${{ steps.config.outputs.test }}
       test-command-b64: ${{ steps.config.outputs.test-command-b64 }}
+      test-pr-command-b64: ${{ steps.config.outputs.test-pr-command-b64 }}
+      # test.pr_command is set: this repository runs two depths of Check. Fast
+      # (lint, the pr_command, build) on pull requests and pushes, full (lint,
+      # test.command, build) on a dispatch, a schedule, a hotfix and wherever a
+      # Release PR has to be checked itself. Without it everything is full.
+      fast-mode: ${{ steps.config.outputs.fast-mode }}
+      depth: ${{ steps.depth.outputs.depth }}
       test-artifact-path: ${{ steps.config.outputs.test-artifact-path }}
       build: ${{ steps.config.outputs.build }}
       build-command-b64: ${{ steps.config.outputs.build-command-b64 }}
@@ -106,11 +123,19 @@ jobs:
       render-hook: ${{ steps.config.outputs.render-hook }}
       reuse: ${{ steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' }}
       reuse-note: ${{ steps.tree.outputs.reuse == 'true' && steps.tree.outputs.note || steps.reuse.outputs.note }}
+      # Fast mode only: a Release PR whose base tip has not passed the full
+      # Check. Check fails at once and runs nothing; it is never a reuse.
+      unverified: ${{ steps.reuse.outputs.unverified }}
+      unverified-note: ${{ steps.reuse.outputs.unverified-note }}
       tree: ${{ steps.tree.outputs.tree }}
-      # A reused Check needs no tooling, so it does not queue for the
-      # configured runner — often one self-hosted box that the work it saves
-      # would otherwise occupy.
-      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true') && '["ubuntu-latest"]' || steps.config.outputs.runner }}
+      # The artifact name a green Check leaves for its tree, without the tree:
+      # pipeline-checked-tree after a full Check, pipeline-fast-tree after a
+      # fast one.
+      marker: ${{ steps.marker.outputs.name }}
+      # A reused Check needs no tooling, and one that only reports "not fully
+      # verified" needs none either, so neither takes the configured runner:
+      # the one-core runner Guard uses is enough.
+      check-runner: ${{ (steps.tree.outputs.reuse == 'true' || steps.reuse.outputs.reuse == 'true' || steps.reuse.outputs.unverified == 'true') && '["ubuntu-slim"]' || steps.config.outputs.runner }}
     steps:
       - name: Checkout the configuration
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,6 +281,20 @@ jobs:
           if [[ "$DEPENDENCY_CACHE" == "false" ]]; then CACHE=""; fi
           out cache "$CACHE"
           out dependency-cache "$DEPENDENCY_CACHE"
+          # runtime.build_cache: one directory (PIPELINE_BUILD_CACHE_DIR) that a
+          # task runner such as turbo keeps its results in, restored on every
+          # Check and saved by pushes only. What goes in it, and proving that a
+          # replayed result is safe, is the repository's business. It follows
+          # the dependency cache: a runner whose disk outlives the job keeps its
+          # own.
+          BUILD_CACHE=$(yq -r '.runtime.build_cache' "$CONFIG_FILE")
+          case "$BUILD_CACHE" in
+            null) BUILD_CACHE=false ;;
+            true|false) ;;
+            *) echo "::error::$CONFIG_FILE: .runtime.build_cache must be true or false, got '$BUILD_CACHE'."; exit 1 ;;
+          esac
+          if [[ "$DEPENDENCY_CACHE" == "false" ]]; then BUILD_CACHE=false; fi
+          out build-cache "$BUILD_CACHE"
           # pnpm/action-setup reads a pin from devEngines.packageManager first, then packageManager;
           # ask for the latest pnpm only when the manifest pins neither.
           PNPM_VERSION=""
@@ -274,6 +313,17 @@ jobs:
           b64 lint-command "$(str '.lint.command' '')"
           bool test '.test.enable' true
           b64 test-command "$(str '.test.command' '')"
+          # test.pr_command: what a fast Check runs instead of test.command.
+          # Setting it is the switch for the two depths ("How deep does this
+          # Check go?"); a repository without it is checked in full every time.
+          case "$(yq -r '.test.pr_command | tag' "$CONFIG_FILE")" in
+            '!!null'|'!!str') ;;
+            *) bad "test.pr_command must be a string: the command a fast Check runs instead of test.command." ;;
+          esac
+          PR_COMMAND=$(str '.test.pr_command' '')
+          if [[ ! "$PR_COMMAND" =~ [^[:space:]] ]]; then PR_COMMAND=""; fi
+          b64 test-pr-command "$PR_COMMAND"
+          if [[ -n "$PR_COMMAND" ]]; then out fast-mode true; else out fast-mode false; fi
           out test-artifact-path "$(str '.test.artifact_path' '')"
           bool build '.build.enable' true
           b64 build-command "$(str '.build.command' '')"
@@ -307,8 +357,14 @@ jobs:
           # `gha` with mode=max sends every intermediate layer through the
           # runner's uplink (edilio 2026-08-24: 438 s of a 634 s build; still
           # 913 s for one image on 2026-11-13), `local` keeps it on the runner's
-          # work volume. A repository can still name either.
-          DOCKER_CACHE_DEFAULT=gha
+          # work volume. On a hosted runner the default is none: Deploy runs on
+          # a release event, whose cache scope is the new tag, and the next
+          # release's tag cannot read it. edilio 2026-11-15: 1.7 GB of
+          # buildkit-blob entries under refs/tags/v0.8.0-beta.2, written by the
+          # Deploy and never read again, half the repository's 10 GB cache, and
+          # part of the 485 s the default image took to build and push. A
+          # repository can still name any backend.
+          DOCKER_CACHE_DEFAULT=none
           if jq -e 'index("self-hosted") != null' <<< "$RUNNER" >/dev/null; then DOCKER_CACHE_DEFAULT=local; fi
           DOCKER_CACHE=$(str '.deploy.docker.cache_backend' "$DOCKER_CACHE_DEFAULT")
           case "$DOCKER_CACHE" in
@@ -318,6 +374,40 @@ jobs:
           out docker-cache-backend "$DOCKER_CACHE"
           bool render-hook '.deploy.render.hook' false
           echo "stack=$STACK runner=$RUNNER provider=$PROVIDER targets=$TARGETS"
+
+      # Two depths, for a repository that sets test.pr_command (fast mode).
+      # Fast runs lint, the pr_command and build: every pull request and every
+      # push. Full runs lint, test.command and build: a dispatch and a schedule
+      # (how the tip of a branch gets its full Check before a release), a
+      # hotfix (it goes straight into main), and a Release PR or a promotion
+      # that has to be checked itself: the one is more than its base plus a
+      # version, the other meets commits of its own on the base. Neither may
+      # go green on the fast suite. Only the two events named here are fast;
+      # anything else is full, and so is every run of a repository without a
+      # pr_command.
+      - name: How deep does this Check go?
+        id: depth
+        shell: bash
+        env:
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          depth=full
+          if [[ "${FAST_MODE:-}" == "true" ]]; then
+            case "${EVENT_NAME:-}" in
+              push) depth=fast ;;
+              pull_request)
+                case "${HEAD_REF:-}" in
+                  hotfix/*|release/*|promote/*) ;;
+                  *) depth=fast ;;
+                esac
+                ;;
+            esac
+          fi
+          echo "depth=$depth" >> "$GITHUB_OUTPUT"
+          echo "Depth: $depth (fast mode ${FAST_MODE:-false}, ${EVENT_NAME:-no event}${HEAD_REF:+ from $HEAD_REF})"
 
       - name: Does this repository have a dev branch?
         id: dev
@@ -385,33 +475,50 @@ jobs:
       # Check report that result instead of recomputing it. Markers from a fork
       # do not count: a fork's pull request runs the workflow from its own head
       # and could upload any name. No marker, an API error included, runs the
-      # full Check.
+      # Check.
+      #
+      # The marker's name carries the depth of the Check that left it:
+      # pipeline-checked-tree-<tree> after a full Check (the only name there
+      # was before the depths, so every older marker counts as full) and
+      # pipeline-fast-tree-<tree> after a fast one. A full run stands down only
+      # for a full marker; a fast run for either, since the full Check covers
+      # what the fast one runs. In fast mode a dispatch and a schedule look
+      # too: a second full run of a tree that already passed takes seconds.
       - name: Was this tree checked green before?
         id: tree
-        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'push' || github.event_name == 'pull_request'
+          || (steps.config.outputs.fast-mode == 'true' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'))
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          DEPTH: ${{ steps.depth.outputs.depth }}
         run: |
           set -euo pipefail
-          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
+          label="Full Check"; names=(pipeline-checked-tree)
+          if [[ "${DEPTH:-full}" == "fast" ]]; then label="Fast Check"; names+=(pipeline-fast-tree); fi
+          full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "$label: $1"; exit 0; }
           tree=$(gh api "repos/$REPO/git/commits/$SHA" --jq '.tree.sha' 2>/dev/null) || full "the commits API did not answer"
           [[ "$tree" =~ ^[0-9a-f]{40}$ ]] || full "${SHA:0:7} names no tree"
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
-          runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$tree&per_page=100" \
-            --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
-                    and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
-                  | unique | .[]' 2>/dev/null) || full "the artifacts API did not answer"
-          for run in $runs; do
-            info=$(gh api "repos/$REPO/actions/runs/$run" --jq '[.path, .head_branch, .head_sha] | @tsv' 2>/dev/null) || continue
-            IFS=$'\t' read -r path branch head <<< "$info"
-            [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
-            note="Lint, test and build passed on the identical tree ${tree:0:7} in run $run ($branch at ${head:0:7}), so that result stands."
-            { echo "reuse=true"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
-            echo "$note"
-            exit 0
+          for name in "${names[@]}"; do
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=$name-$tree&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                    | unique | .[]' 2>/dev/null) || full "the artifacts API did not answer"
+            what="Lint, test and build"
+            if [[ "$name" == "pipeline-fast-tree" ]]; then what="Lint, the fast tests and build"; fi
+            for run in $runs; do
+              info=$(gh api "repos/$REPO/actions/runs/$run" --jq '[.path, .head_branch, .head_sha] | @tsv' 2>/dev/null) || continue
+              IFS=$'\t' read -r path branch head <<< "$info"
+              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+              note="$what passed on the identical tree ${tree:0:7} in run $run ($branch at ${head:0:7}), so that result stands."
+              { echo "reuse=true"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "$note"
+              exit 0
+            done
           done
           full "no Check of tree ${tree:0:7} has passed yet"
 
@@ -433,6 +540,17 @@ jobs:
       # promotion were the two that ran lint, test and build). It reuses the
       # push run of the Release it promotes, provided the merge into the base
       # yields the head's own tree — a base with commits of its own is new code.
+      #
+      # In fast mode the base's push run is a fast Check, and a release must
+      # not stand on that. A Release PR (`release/*`) then asks for more: the
+      # tree of the base tip has to carry a full marker, left by a dispatched
+      # or scheduled run of that branch (or by a hotfix's Check). Without one
+      # the answer is `unverified`: Check fails at once, names the command
+      # that runs the full Check, and runs nothing. That is never a reuse. A
+      # Release PR that is more than its base plus a version is checked
+      # itself, in full ("How deep does this Check go?"). The promotion's
+      # rule is unchanged: it stands on the push run of the Release it
+      # promotes. Where that fails, its own Check is a full one too.
       - name: Is this a Release PR over a green base?
         id: reuse
         if: >-
@@ -449,6 +567,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MERGE_SHA: ${{ github.sha }}
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
         run: |
           set -euo pipefail
           full() { echo "reuse=false" >> "$GITHUB_OUTPUT"; echo "Full Check: $1"; exit 0; }
@@ -507,6 +626,35 @@ jobs:
                   sys.exit(name + " changes more than its version")
           PY
           ) || full "$verdict"
+          if [[ "${FAST_MODE:-}" == "true" && "${HEAD_REF:-}" == release/* ]]; then
+            # Fails closed: an API that does not answer is "not verified" too.
+            # Re-running all jobs of this run asks again.
+            unverified() {
+              { echo "reuse=false"; echo "unverified=true"; echo "unverified-note=$1"; } >> "$GITHUB_OUTPUT"
+              echo "Not fully verified: $1"
+              exit 0
+            }
+            green_tree=$(gh api "repos/$REPO/git/commits/$GREEN_SHA" --jq '.tree.sha' 2>/dev/null) \
+              || unverified "the commits API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
+            [[ "$green_tree" =~ ^[0-9a-f]{40}$ ]] \
+              || unverified "${GREEN_SHA:0:7} names no tree, so nothing shows that $GREEN_NAME passed the full Check"
+            # The same conditions as "Was this tree checked green before?":
+            # live, from this repository's own pipeline, never from a fork.
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$green_tree&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                    | unique | .[]' 2>/dev/null) \
+              || unverified "the artifacts API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
+            for run in $runs; do
+              path=$(gh api "repos/$REPO/actions/runs/$run" --jq '.path' 2>/dev/null) || continue
+              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+              note="The full Check passed on $GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}, run $run); this head adds only the version and the changelog, so that result stands."
+              { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "Reusing the full Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
+              exit 0
+            done
+            unverified "$GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}) has not passed the full Check"
+          fi
           runs=$(gh api "repos/$REPO/actions/runs?head_sha=$GREEN_SHA&event=push$GREEN_BRANCH&per_page=20" \
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \
             || full "the runs API did not answer"
@@ -514,6 +662,29 @@ jobs:
           note="Lint, test and build passed on $GREEN_NAME at ${GREEN_SHA:0:7}; this head adds only the version and the changelog, so that result stands."
           { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
           echo "Reusing the Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
+
+      # Last in Guard, once both reuse steps have spoken. The full name is the
+      # one a release stands on, so it is written only by a run that was full
+      # itself or stood down for a full marker of its very own tree. A fast
+      # run writes the fast name, also when it stood down for a full marker.
+      # So does every run that stood down under the Release PR rule in fast
+      # mode: its tree is another commit's plus a version, which the rule
+      # checks anew each time instead of taking it from a marker.
+      - name: Name the tree marker
+        id: marker
+        shell: bash
+        env:
+          DEPTH: ${{ steps.depth.outputs.depth }}
+          FAST_MODE: ${{ steps.config.outputs.fast-mode }}
+          RELEASE_RULE: ${{ steps.reuse.outputs.reuse }}
+        run: |
+          set -euo pipefail
+          name=pipeline-fast-tree
+          if [[ "${DEPTH:-}" == "full" ]] && ! [[ "${FAST_MODE:-}" == "true" && "${RELEASE_RULE:-}" == "true" ]]; then
+            name=pipeline-checked-tree
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "A green Check marks its tree as $name."
 
   check:
     name: Check
@@ -534,6 +705,36 @@ jobs:
       # runner, in seconds.
       REUSE: ${{ needs.guard.outputs.reuse }}
     steps:
+      # Fast mode only. The first step, and it fails: every step below is
+      # skipped, so nothing is checked and no marker is written. Re-running
+      # only the failed job would repeat Guard's old answer; the whole run has
+      # to be re-run for Guard to look again.
+      - name: Not fully verified
+        id: unverified
+        if: needs.guard.outputs.unverified == 'true'
+        shell: bash
+        env:
+          NOTE: ${{ needs.guard.outputs.unverified-note }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Not fully verified"
+            echo
+            echo "$NOTE."
+            echo
+            echo "A Release PR is green only when the tip of its base branch has passed the full Check. Run it:"
+            echo
+            echo '```sh'
+            echo "gh workflow run ci.yaml --ref $BASE_REF -R $REPO"
+            echo '```'
+            echo
+            echo "A green full run re-runs this Pipeline run by itself. By hand, re-run all jobs of it, not only the failed one: Guard has to look again."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::Not fully verified: $NOTE. Run the full Check on $BASE_REF with: gh workflow run ci.yaml --ref $BASE_REF -R $REPO — a green full run re-runs this run by itself; by hand, re-run all jobs of it, not only the failed one."
+          exit 1
+
       - name: Reuse an earlier Check
         if: env.REUSE == 'true'
         shell: bash
@@ -636,25 +837,52 @@ jobs:
 
       # Node before pnpm: pnpm/action-setup v6 bootstraps pnpm with `npm ci`, taking npm from
       # PATH, and a self-hosted runner's system Node may have none (the homelab images had Node 18
-      # and no npm, 2026-10-11). setup-node's `cache: pnpm` needs pnpm on PATH, so pnpm caches its
-      # own store instead.
+      # and no npm, 2026-10-11). Neither action caches: see "Locate the dependency cache".
       - name: Set up Node.js
         if: env.REUSE != 'true' && env.STACK == 'nodejs'
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
       - name: Set up pnpm (from package.json)
         if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version == ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Set up pnpm (latest)
         if: env.REUSE != 'true' && env.STACK == 'nodejs' && env.PM == 'pnpm' && needs.guard.outputs.pnpm-version != ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ needs.guard.outputs.pnpm-version }}
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+
+      # The package store is restored on every Check and saved only by a push.
+      # A cache is scoped to the ref that saved it, and a pull request can read
+      # its base branch's entries but no other pull request's, so the built-in
+      # caches of setup-node and pnpm/action-setup (which save on every miss)
+      # stored one copy per pull request: edilio 2026-11-15, 26 entries of
+      # 311 MB, most of them never read again, evicting the base branch's.
+      # Now the base branch holds the one copy every pull request starts from.
+      - name: Locate the dependency cache
+        id: deps
+        if: env.REUSE != 'true' && env.STACK == 'nodejs' && needs.guard.outputs.cache != ''
+        shell: bash
+        env:
+          CACHE: ${{ needs.guard.outputs.cache }}
+        run: |
+          set -euo pipefail
+          case "$CACHE" in
+            pnpm) dir=$(pnpm store path --silent); lock=pnpm-lock.yaml ;;
+            npm) dir=$(npm config get cache); lock=package-lock.json ;;
+            yarn) if [[ "$(yarn --version)" == 1.* ]]; then dir=$(yarn cache dir); else dir=$(yarn config get cacheFolder); fi; lock=yarn.lock ;;
+            *) echo "::error::Unknown dependency cache '$CACHE'"; exit 1 ;;
+          esac
+          prefix="deps-$CACHE-$RUNNER_OS-$RUNNER_ARCH-"
+          { echo "path=$dir"; echo "prefix=$prefix"; echo "key=$prefix$(sha256sum "$lock" | cut -c1-64)"; } >> "$GITHUB_OUTPUT"
+      - name: Restore the dependency cache
+        id: deps-restore
+        if: env.REUSE != 'true' && steps.deps.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+          restore-keys: ${{ steps.deps.outputs.prefix }}
       - name: Set up Python
         if: env.REUSE != 'true' && env.STACK == 'python'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -680,6 +908,52 @@ jobs:
               if [[ -f requirements-dev.txt ]]; then pip install -r requirements-dev.txt; fi
               if [[ -f pyproject.toml && ! -f requirements.txt ]]; then pip install -e ".[dev]" 2>/dev/null || pip install -e .; fi ;;
           esac
+      - name: Save the dependency cache
+        if: >-
+          env.REUSE != 'true' && steps.deps.outputs.key != '' && github.event_name == 'push'
+          && steps.deps-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+
+      # runtime.build_cache: a task runner's result cache (turbo's, for one)
+      # that outlives the job. Restored on every Check: a pull request reads the
+      # newest entry its base branch saved. Saved by every run but a pull
+      # request's, once every step passed, under a new key per run, so the base
+      # branch always offers its latest state and no pull request stores a copy
+      # nobody else can read. That includes the full Check by dispatch or by
+      # night: where a push only reuses its pull request's fast Check, that run
+      # is the one that rebuilds every package on the base branch.
+      # The key's lockfile and Node parts make a new lockfile or Node start from
+      # the closest older entry instead of an exact one; the repository's own
+      # hashing decides what is replayed (edilio: scripts/ci-turbo.sh).
+      - name: Name the build cache
+        id: build-cache
+        if: env.REUSE != 'true' && needs.guard.outputs.build-cache == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node=$(node --version 2>/dev/null || echo none)
+          # No repository has all three: under pipefail a missing one must not
+          # end the step.
+          lock=$({ cat pnpm-lock.yaml package-lock.json yarn.lock 2>/dev/null || true; } | sha256sum | cut -c1-16)
+          base="build-$RUNNER_OS-$RUNNER_ARCH-node-$node-"
+          {
+            echo "path=$HOME/.cache/pipeline-build-cache"
+            echo "key=$base$lock-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            echo "restore-keys<<EOF"; echo "$base$lock-"; echo "$base"; echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          mkdir -p "$HOME/.cache/pipeline-build-cache"
+          echo "PIPELINE_BUILD_CACHE_DIR=$HOME/.cache/pipeline-build-cache" >> "$GITHUB_ENV"
+      - name: Restore the build cache
+        id: build-cache-restore
+        if: env.REUSE != 'true' && steps.build-cache.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.build-cache.outputs.path }}
+          key: ${{ steps.build-cache.outputs.key }}
+          restore-keys: ${{ steps.build-cache.outputs.restore-keys }}
 
       - name: Which linter?
         id: linter
@@ -691,10 +965,37 @@ jobs:
           set -euo pipefail
           LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
           if [[ -z "$LINT_COMMAND" && -f .trunk/trunk.yaml ]]; then echo "trunk=true" >> "$GITHUB_OUTPUT"; else echo "trunk=false" >> "$GITHUB_OUTPUT"; fi
+      # Trunk lints what a change brought (hold the line). A pull request and a
+      # push name that change themselves. A run nobody pushed (workflow_dispatch,
+      # schedule) names none, and the action would fall back to its `all` mode:
+      # every file of the repository, with every issue that predates Trunk there
+      # (edilio, run 43834465636: 2928 files, 11 minutes, 30 old issues, red).
+      # Such a run lints what its tip commit brought instead, the range the
+      # push Check of that commit linted. The action's push mode reads the two
+      # ends from these variables before it looks at the event.
+      - name: What does Trunk lint in a run without a push?
+        id: lint-range
+        if: >-
+          env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
+          && github.event_name != 'pull_request' && github.event_name != 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          after=$(git rev-parse HEAD)
+          # A commit without a parent: the action reads all zeros as "a new
+          # branch" and checks everything, which is that commit's change.
+          before=$(git rev-parse --verify --quiet 'HEAD^1' || echo 0000000000000000000000000000000000000000)
+          { echo "GITHUB_EVENT_BEFORE=$before"; echo "GITHUB_EVENT_AFTER=$after"; } >> "$GITHUB_ENV"
+          echo "mode=push" >> "$GITHUB_OUTPUT"
+          echo "Trunk lints ${before:0:7}..${after:0:7}, the change of the tip commit."
       - name: Lint (trunk)
         if: env.REUSE != 'true' && needs.guard.outputs.lint == 'true' && steps.linter.outputs.trunk == 'true'
         uses: trunk-io/trunk-action@04ba50e7658c81db7356da96657e6e77f220bfa3 # v1.3.1
+        env:
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
         with:
+          # Empty on a pull request and a push: the action reads the event.
+          check-mode: ${{ steps.lint-range.outputs.mode }}
           # ~/.cache/trunk follows the dependency cache: a runner that keeps its
           # package store keeps trunk's tools as well.
           cache: ${{ needs.guard.outputs.dependency-cache != 'false' }}
@@ -703,6 +1004,7 @@ jobs:
         shell: bash
         env:
           LINT_COMMAND_B64: ${{ needs.guard.outputs.lint-command-b64 }}
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
         run: |
           set -euo pipefail
           LINT_COMMAND=$(base64 -d <<< "$LINT_COMMAND_B64")
@@ -717,10 +1019,20 @@ jobs:
         shell: bash
         env:
           TEST_COMMAND_B64: ${{ needs.guard.outputs.test-command-b64 }}
+          TEST_PR_COMMAND_B64: ${{ needs.guard.outputs.test-pr-command-b64 }}
+          # fast or full, for the repository's own scripts in Lint, Test and
+          # Build. Older pins of this workflow do not set it: unset means full.
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
           CI: 'true'
         run: |
           set -euo pipefail
           TEST_COMMAND=$(base64 -d <<< "$TEST_COMMAND_B64")
+          # A fast Check runs test.pr_command in place of test.command. Only
+          # then: a full Check never reads it.
+          if [[ "${PIPELINE_DEPTH:-full}" == "fast" ]]; then
+            TEST_PR_COMMAND=$(base64 -d <<< "$TEST_PR_COMMAND_B64")
+            if [[ -n "$TEST_PR_COMMAND" ]]; then TEST_COMMAND="$TEST_PR_COMMAND"; fi
+          fi
           if [[ -n "$TEST_COMMAND" ]]; then bash -eo pipefail -c "$TEST_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.test' package.json >/dev/null; then "$PM" test
           elif [[ "$STACK" == "python" ]] && [[ -d tests ]]; then python -m pytest
@@ -743,6 +1055,7 @@ jobs:
         shell: bash
         env:
           BUILD_COMMAND_B64: ${{ needs.guard.outputs.build-command-b64 }}
+          PIPELINE_DEPTH: ${{ needs.guard.outputs.depth }}
           APP_ENV: preview
         run: |
           set -euo pipefail
@@ -750,6 +1063,13 @@ jobs:
           if [[ -n "$BUILD_COMMAND" ]]; then bash -eo pipefail -c "$BUILD_COMMAND"
           elif [[ "$STACK" == "nodejs" ]] && jq -e '.scripts.build' package.json >/dev/null; then "$PM" run build
           else echo "::notice::No build command configured and none detected; skipped."; fi
+      # After every step that may write to it, and only when all of them passed.
+      - name: Save the build cache
+        if: env.REUSE != 'true' && steps.build-cache.outputs.key != '' && github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.build-cache.outputs.path }}
+          key: ${{ steps.build-cache.outputs.key }}
       - name: Upload build artifact
         if: env.REUSE != 'true' && needs.guard.outputs.build == 'true' && needs.guard.outputs.artifact-path != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -766,7 +1086,8 @@ jobs:
       # Release PR is squashed. `overwrite` so a re-run never fails on the name
       # an earlier attempt of the same run used. A re-run does not reuse its own
       # first attempt (GitHub hides that attempt's artifacts from the lookup,
-      # measured 2026-10-14); a later run of the same tree does.
+      # measured 2026-10-14); a later run of the same tree does. The name
+      # says how deep the Check went (Guard, "Name the tree marker").
       - name: Write the tree marker
         if: needs.guard.outputs.tree != ''
         shell: bash
@@ -779,10 +1100,75 @@ jobs:
         if: needs.guard.outputs.tree != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: pipeline-checked-tree-${{ needs.guard.outputs.tree }}
+          name: ${{ needs.guard.outputs.marker }}-${{ needs.guard.outputs.tree }}
           path: ${{ runner.temp }}/checked-tree.json
           retention-days: 30
           overwrite: true
+
+  # Fast mode only, after a dispatched or scheduled full Check went green and
+  # its marker is up: the Release PR onto this branch failed as "not fully
+  # verified" and would now pass. This job re-runs that Pipeline run, whole,
+  # so Guard answers again; nobody has to click. It is a job of its own
+  # because re-running needs `actions: write`, and Check must not hold that:
+  # Check runs the repository's code beside the checkout's token. Here nothing
+  # is checked out and nothing from the repository is executed. The caller
+  # has to grant `actions: write` (the rendered caller does); a called
+  # workflow may not ask for more than its caller grants. The job-level `if`
+  # keeps it from starting at all on a pull request, on a push and in a
+  # repository without test.pr_command, so no runner is billed there. It never
+  # fails the workflow: whatever goes wrong is a notice.
+  recheck:
+    name: Recheck Release PR
+    needs: [guard, check]
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+      && needs.check.result == 'success'
+      && needs.guard.outputs.fast-mode == 'true' && needs.guard.outputs.depth == 'full'
+      && needs.guard.outputs.tree != ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write # re-run the Release PR's Pipeline run
+      pull-requests: read # find the Release PR onto this branch
+    steps:
+      - name: Re-run the Release PR this full Check unblocks
+        id: rerun
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          if [[ "${REF_TYPE:-}" != "branch" || -z "${BRANCH:-}" ]]; then echo "Not a branch; no Release PR targets it."; exit 0; fi
+          base=$(jq -rn --arg b "$BRANCH" '$b | @uri')
+          prs=$(gh api "repos/$REPO/pulls?state=open&base=$base&per_page=100" \
+            --jq '.[] | select(.head.ref | startswith("release/")) | [.number, .head.sha, (.head.repo.full_name // "")] | @tsv' 2>/dev/null) || {
+            echo "::notice::Could not list the pull requests into $BRANCH. If a Release PR there failed as not fully verified, re-run all jobs of its Pipeline run."
+            exit 0
+          }
+          if [[ -z "$prs" ]]; then echo "No open Release PR into $BRANCH."; exit 0; fi
+          while IFS=$'\t' read -r number sha head_repo; do
+            [[ "$number" =~ ^[0-9]+$ && "$sha" =~ ^[0-9a-f]{40}$ && "$head_repo" == "$REPO" ]] || continue
+            by_hand="Re-run all jobs of the Pipeline run of Release PR #$number by hand (not only the failed one)"
+            run=$(gh api "repos/$REPO/actions/runs?head_sha=$sha&event=pull_request&per_page=20" \
+              --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml")] | first // empty | [.id, (.conclusion // "")] | @tsv' 2>/dev/null </dev/null) || {
+              echo "::notice::The full Check passed, but the workflow runs of Release PR #$number could not be read. $by_hand."
+              continue
+            }
+            IFS=$'\t' read -r id conclusion <<< "$run"
+            if [[ ! "$id" =~ ^[0-9]+$ ]]; then echo "Release PR #$number has no Pipeline run on ${sha:0:7}."; continue; fi
+            if [[ "$conclusion" != "failure" ]]; then echo "Release PR #$number: run $id is '${conclusion:-still running}', nothing to re-run."; continue; fi
+            # All jobs, not only the failed ones: Guard's answer is what has to change.
+            if gh run rerun "$id" -R "$REPO" >/dev/null 2>&1 </dev/null; then
+              echo "::notice::Re-running run $id of Release PR #$number: $BRANCH has now passed the full Check."
+            else
+              echo "::notice::The full Check passed, but run $id of Release PR #$number could not be re-run (the caller has to grant actions: write). $by_hand: gh run rerun $id -R $REPO"
+            fi
+          done <<< "$prs"
 
   deploy:
     name: Deploy (${{ matrix.target.name }})
@@ -860,19 +1246,41 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: ${{ needs.guard.outputs.node-version }}
-          cache: ${{ needs.guard.outputs.cache != 'pnpm' && needs.guard.outputs.cache || '' }}
           registry-url: https://registry.npmjs.org
       - name: Set up pnpm (from package.json)
         if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version == ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
       - name: Set up pnpm (latest)
         if: env.PROVIDER != 'docker-ghcr' && needs.guard.outputs.package-manager == 'pnpm' && needs.guard.outputs.pnpm-version != ''
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: ${{ needs.guard.outputs.pnpm-version }}
-          cache: ${{ needs.guard.outputs.cache == 'pnpm' }}
+      # Restore only: a release event's cache scope is its tag, which no later
+      # run can read, but it can read the default branch's entry that Check's
+      # pushes save.
+      - name: Locate the dependency cache
+        id: deps
+        if: (env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm') && needs.guard.outputs.cache != ''
+        shell: bash
+        env:
+          CACHE: ${{ needs.guard.outputs.cache }}
+        run: |
+          set -euo pipefail
+          case "$CACHE" in
+            pnpm) dir=$(pnpm store path --silent); lock=pnpm-lock.yaml ;;
+            npm) dir=$(npm config get cache); lock=package-lock.json ;;
+            yarn) if [[ "$(yarn --version)" == 1.* ]]; then dir=$(yarn cache dir); else dir=$(yarn config get cacheFolder); fi; lock=yarn.lock ;;
+            *) echo "::error::Unknown dependency cache '$CACHE'"; exit 1 ;;
+          esac
+          prefix="deps-$CACHE-$RUNNER_OS-$RUNNER_ARCH-"
+          { echo "path=$dir"; echo "prefix=$prefix"; echo "key=$prefix$(sha256sum "$lock" | cut -c1-64)"; } >> "$GITHUB_OUTPUT"
+      - name: Restore the dependency cache
+        if: steps.deps.outputs.key != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.deps.outputs.path }}
+          key: ${{ steps.deps.outputs.key }}
+          restore-keys: ${{ steps.deps.outputs.prefix }}
       - name: Install dependencies
         if: env.PROVIDER == 'cloudflare-workers' || env.PROVIDER == 'npm'
         shell: bash

@@ -1,8 +1,10 @@
 ---
 # The one caller every repository carries as .github/workflows/ci.yaml.
 # train/bin/migrate-repos.ts (maxbec/pipeline) renders it: __PIPELINE_SHA__ and
-# __PIPELINE_VERSION__ become the pinned commit and its tag. Nothing else is
-# per-repository — behaviour lives in .github/pipeline.yaml.
+# __PIPELINE_VERSION__ become the pinned commit and its tag, and the schedule
+# block between the two markers stays only where .github/pipeline.yaml sets
+# `test.pr_command`. Nothing else is per-repository — behaviour lives in
+# .github/pipeline.yaml.
 #
 # The job id `pipeline` is load-bearing: the check-run contexts are
 # `pipeline / Guard`, `pipeline / Check` and `pipeline / Deploy`, and
@@ -20,6 +22,17 @@ on:
     branches: [dev, main]
   release:
     types: [published]
+  # The full Check on demand. Where `test.pr_command` is set, pull requests
+  # and pushes run the fast Check, and a Release PR is green only once its
+  # base has passed the full one:
+  #   gh workflow run ci.yaml --ref <branch>
+  workflow_dispatch: {}
+  # __NIGHTLY_BEGIN__
+  # The full Check every night, on the default branch. A tree that passed it
+  # before is reused, so a night without a merge is cheap.
+  schedule:
+    - cron: '23 2 * * *'
+  # __NIGHTLY_END__
 
 concurrency:
   group: pipeline-${{ github.event_name }}-${{ github.ref }}
@@ -32,7 +45,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-      actions: read
+      # write: a green full Check re-runs the Check of the Release PR that
+      # waited for it. Everything else the pipeline does with it is a read.
+      actions: write
       checks: write
       deployments: write
       packages: write

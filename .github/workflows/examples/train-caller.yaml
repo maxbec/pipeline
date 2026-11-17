@@ -20,8 +20,10 @@ on:
   workflow_dispatch: {}
   # __TRAIN_SCHEDULE_BEGIN__
   # The sweep, for what no event reports (a resolved thread, a lost event).
+  # Four times a day: every Pipeline run that finishes starts the train
+  # already, and each scheduled run bills a minute.
   schedule:
-    - cron: '*/30 * * * *'
+    - cron: '17 */6 * * *'
   # __TRAIN_SCHEDULE_END__
 
 permissions: {}
