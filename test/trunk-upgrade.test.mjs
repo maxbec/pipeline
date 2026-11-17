@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
+import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
-import { ROOT, runStep, yaml } from "./helpers.mjs"
+import { ROOT, runStep, scratch, yaml } from "./helpers.mjs"
 
 const TRUNK_UPGRADE = join(ROOT, ".github/workflows/trunk-upgrade.yaml")
 const CALLER = join(ROOT, ".github/workflows/trunk-upgrade-scheduled.yaml")
@@ -59,4 +61,37 @@ test("this repository's weekly run calls the Trunk Upgrade of its own tree", () 
   assert.equal(job.uses, "./.github/workflows/trunk-upgrade.yaml")
   assert.equal(job.secrets, "inherit")
   assert.deepEqual(job.permissions, { contents: "write", "pull-requests": "write" })
+})
+
+test("the repository's git hooks do not run for the bot commit", () => {
+  const all = steps()
+  const noHooks = all.find((s) => s.id === "no-hooks")
+  const cpr = all.find((s) => s.id === "cpr")
+  assert.ok(noHooks, "a step with id no-hooks")
+  assert.equal(noHooks.if, cpr.if, "only where a pull request is created")
+  assert.ok(all.indexOf(all.find((s) => s.id === "upgrade")) < all.indexOf(noHooks), "after Trunk ran and set its hooks")
+  assert.ok(all.indexOf(noHooks) < all.indexOf(cpr), "before the commit")
+
+  // A repository as Trunk leaves it: core.hooksPath names hooks that need the
+  // repository's dependencies, which a runner does not have.
+  const repo = scratch("hooks-")
+  const git = (...args) =>
+    spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", ...args], {
+      cwd: repo,
+      encoding: "utf8",
+    })
+  git("init", "-q")
+  const hooks = join(repo, "hooks")
+  mkdirSync(hooks)
+  writeFileSync(join(hooks, "commit-msg"), "#!/bin/sh\necho 'commitlint is not installed' >&2\nexit 1\n", { mode: 0o755 })
+  git("config", "--local", "core.hooksPath", hooks)
+  writeFileSync(join(repo, "trunk.yaml"), "a\n")
+  git("add", "trunk.yaml")
+  const blocked = git("commit", "-q", "-m", "chore(deps): trunk upgrade")
+  assert.notEqual(blocked.status, 0, "the hook blocks the commit, as on edilio on 2026-11-17")
+
+  const res = runStep("upgrade", "no-hooks", { CWD: repo }, TRUNK_UPGRADE)
+  assert.equal(res.status, 0, res.stderr)
+  const committed = git("commit", "-q", "-m", "chore(deps): trunk upgrade")
+  assert.equal(committed.status, 0, committed.stderr)
 })

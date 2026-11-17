@@ -182,6 +182,19 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Keep git hooks out of the bot commit
+        if: steps.upgrade.outputs.changed == 'true'
+        id: no-hooks
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Trunk points core.hooksPath at the repository's hooks as soon as it
+          # runs, and the next step commits on this runner, where none of the
+          # repository's dependencies are installed. edilio's commit-msg hook
+          # (`npx --no-install commitlint`) blocked the commit that way on
+          # 2026-11-17. The pull request is linted by its own Check.
+          git config --local core.hooksPath /dev/null
+
       - name: Create Pull Request
         if: steps.upgrade.outputs.changed == 'true'
         id: cpr
