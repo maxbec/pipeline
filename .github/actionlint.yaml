@@ -1,0 +1,16 @@
+---
+# Read by actionlint, in the weekly maintenance run and on a developer's machine.
+#
+# `job.workflow_sha` is a documented property of the `job` context: inside a
+# called workflow it is the reusable workflow's own commit, and train.yaml and
+# universal-pipeline.yaml check out this repository at it. No released
+# actionlint knows the `job.workflow_*` properties yet (rhysd/actionlint#757 and
+# #707; not in v1.7.12), so it reports each use as undefined.
+#
+# Only that one message is ignored. Drop the entry with the first actionlint
+# release that knows the property; test/actionlint-config.test.mjs fails once
+# the workflows no longer use it.
+paths:
+  .github/workflows/**/*.yaml:
+    ignore:
+      - property "workflow_sha" is not defined in object type

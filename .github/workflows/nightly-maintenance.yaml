@@ -116,13 +116,15 @@ jobs:
           SARIF_UPLOAD_OUTCOME: ${{ steps.sarif-upload.outcome }}
         run: |
           set -euo pipefail
-          echo "### 🔒 Security Audit" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy Step | $TRIVY_OUTCOME |" >> $GITHUB_STEP_SUMMARY
-          echo "| SARIF Produced | $HAS_SARIF |" >> $GITHUB_STEP_SUMMARY
-          echo "| SARIF Upload | ${SARIF_UPLOAD_OUTCOME:-skipped} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### 🔒 Security Audit"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Trivy Step | $TRIVY_OUTCOME |"
+            echo "| SARIF Produced | $HAS_SARIF |"
+            echo "| SARIF Upload | ${SARIF_UPLOAD_OUTCOME:-skipped} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   lint-workflows:
     name: 🔍 Lint Workflow Definitions
@@ -136,25 +138,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.7"
+          # 1.7.12 knows the `ubuntu-slim` runner; 1.7.7 reported it as unknown.
+          # The checksum is the one from the release's checksums file.
+          ACTIONLINT_VERSION="1.7.12"
+          ACTIONLINT_SHA256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
           curl -fsSL -o /tmp/actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum --check --strict
           tar xzf /tmp/actionlint.tar.gz -C /tmp
           sudo mv /tmp/actionlint /usr/local/bin/
       - name: Run actionlint
         shell: bash
         run: |
           set -euo pipefail
-          echo "### 🔍 Workflow Lint" >> "$GITHUB_STEP_SUMMARY"
-          ERRORS=$(actionlint -format '{{range $err := .}}{{$err}}\n{{end}}' 2>&1 || true)
-          if [[ -z "$ERRORS" ]]; then
-            echo "✅ All workflows pass actionlint" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "⚠️ actionlint found issues:" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "$ERRORS" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          ERRORS=$(actionlint -oneline 2>&1 || true)
+          {
+            echo "### 🔍 Workflow Lint"
+            if [[ -z "$ERRORS" ]]; then
+              echo "✅ All workflows pass actionlint"
+            else
+              echo "⚠️ actionlint found issues:"
+              echo '```'
+              echo "$ERRORS"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
           # Surface the findings with color in the job log AND fail the job when
           # actionlint reports issues. The previous `actionlint -color || true`
           # swallowed the exit code, so workflow-lint errors never failed
@@ -182,14 +190,15 @@ jobs:
           RESULT_LINT_WORKFLOWS: ${{ needs.lint-workflows.result }}
         run: |
           set -euo pipefail
-          echo "### 🗓️ Weekly Maintenance Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "| Task | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Workflow Cleanup | $RESULT_CLEANUP_WORKFLOWS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Cache Cleanup | $RESULT_CLEANUP_CACHES |" >> $GITHUB_STEP_SUMMARY
-          echo "| Security Audit | $RESULT_SECURITY_AUDIT |" >> $GITHUB_STEP_SUMMARY
-          echo "| Workflow Lint | $RESULT_LINT_WORKFLOWS |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### 🗓️ Weekly Maintenance Summary"
+            echo ""
+            echo "**Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            echo "| Task | Status |"
+            echo "|------|--------|"
+            echo "| Workflow Cleanup | $RESULT_CLEANUP_WORKFLOWS |"
+            echo "| Cache Cleanup | $RESULT_CLEANUP_CACHES |"
+            echo "| Security Audit | $RESULT_SECURITY_AUDIT |"
+            echo "| Workflow Lint | $RESULT_LINT_WORKFLOWS |"
+          } >> "$GITHUB_STEP_SUMMARY"
