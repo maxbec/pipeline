@@ -1017,7 +1017,7 @@ test("the Train caller is rendered at the pin, without the marker lines, within 
 test("the schedule block is kept or dropped as asked; nothing else differs", () => {
   const kept = renderTrainCaller(TRAIN_TEMPLATE, BETA, "keep")
   const dropped = renderTrainCaller(TRAIN_TEMPLATE, BETA, "drop")
-  assert.match(kept, /\n {2}schedule:\n {4}- cron: '17 \*\/6 \* \* \*'\n/)
+  assert.match(kept, /\n {2}schedule:\n {4}- cron: 17 \*\/6 \* \* \*\n/)
   assert.doesNotMatch(dropped, /schedule:|cron:/)
   const keptLines = kept.split("\n")
   const droppedLines = dropped.split("\n")
@@ -1028,7 +1028,7 @@ test("the schedule block is kept or dropped as asked; nothing else differs", () 
       "# Four times a day: every Pipeline run that finishes starts the train",
       "# already, and each scheduled run bills a minute.",
       "schedule:",
-      "- cron: '17 */6 * * *'",
+      "- cron: 17 */6 * * *",
     ],
   )
   assert.equal(keptLines.length - droppedLines.length, 5)
@@ -1095,7 +1095,7 @@ test("the nightly block is kept or dropped as asked; nothing else differs", () =
   const kept = renderCaller(CALLER_TEMPLATE, BETA, {}, true)
   const dropped = renderCaller(CALLER_TEMPLATE, BETA, {}, false)
   assert.equal(renderCaller(CALLER_TEMPLATE, BETA, {}), dropped, "no nightly unless asked")
-  assert.match(kept, /\n {2}schedule:\n {4}- cron: '23 2 \* \* \*'\n/)
+  assert.match(kept, /\n {2}schedule:\n {4}- cron: 23 2 \* \* \*\n/)
   assert.doesNotMatch(dropped, /schedule:|cron:/)
   const droppedLines = dropped.split("\n")
   assert.deepEqual(
@@ -1104,7 +1104,7 @@ test("the nightly block is kept or dropped as asked; nothing else differs", () =
       .filter((line) => !droppedLines.includes(line))
       .map((line) => line.trim())
       .filter((line) => !line.startsWith("#")),
-    ["schedule:", "- cron: '23 2 * * *'"],
+    ["schedule:", "- cron: 23 2 * * *"],
   )
   // A pin from before the markers has no block to keep: its pipeline knows no depth.
   assert.doesNotMatch(renderCaller(TEMPLATE, PIN, {}, true), /schedule:/)
@@ -1132,7 +1132,7 @@ test("only a repository whose pipeline.yaml sets test.pr_command gets the nightl
   const v3 = (test: string) => `---\nversion: "3"\n${test}deploy:\n  provider: none\n`
 
   const fast = ci(v3("test:\n  command: pnpm test\n  pr_command: pnpm test:changed\n"))
-  assert.match(fast, /\n {2}schedule:\n {4}- cron: '23 2 \* \* \*'\n/)
+  assert.match(fast, /\n {2}schedule:\n {4}- cron: 23 2 \* \* \*\n/)
   for (const [why, config] of [
     ["no pr_command", v3("test:\n  command: pnpm test\n")],
     ["an empty pr_command", v3('test:\n  command: pnpm test\n  pr_command: ""\n')],
