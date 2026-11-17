@@ -31,7 +31,8 @@ scripts/                                    repo bootstrap and org maintenance h
 
 ## 3. The three jobs, and the recheck
 
-- **Guard** (`ubuntu-slim`, always). Sparse-checks out `.github/pipeline.yaml`
+- **Guard** (`ubuntu-slim`, always; `ubuntu-latest` while the variable
+  `PIPELINE_SLIM` is `off`, the switch for a one-core runner outage). Sparse-checks out `.github/pipeline.yaml`
   and the toolchain files, parses them into outputs for the other jobs (step
   id `config`), and on a pull request enforces (step id `rules`): a conventional
   title `type(scope)!: summary`; PRs into `main` only from `dev`, `promote/*`,
