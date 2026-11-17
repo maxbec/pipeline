@@ -1,5 +1,26 @@
 # Changelog
 
+## [5.6.0](https://github.com/maxbec/pipeline/compare/v5.5.3...v5.6.0) (2026-11-16)
+
+
+### ✨ Features
+
+* **pipeline:** fast and full Check depth via test.pr_command ([#164](https://github.com/maxbec/pipeline/issues/164)) ([be2d153](https://github.com/maxbec/pipeline/commit/be2d153bd273c438823be3d7119e5678523e9976))
+
+
+### 🐛 Bug Fixes
+
+* **pipeline:** save the build cache after the full Check too ([#173](https://github.com/maxbec/pipeline/issues/173)) ([e172e6a](https://github.com/maxbec/pipeline/commit/e172e6ac3db741f330fdd886d7f3dfdee5605525))
+* **train:** replace a beta whose own Check is red with the next beta ([#171](https://github.com/maxbec/pipeline/issues/171)) ([49d13cd](https://github.com/maxbec/pipeline/commit/49d13cd253ee67422766d624ac861c1a90cbaf31))
+* **pipeline:** lint the tip commit's change in a run without a push ([#168](https://github.com/maxbec/pipeline/issues/168)) ([6ca97fe](https://github.com/maxbec/pipeline/commit/6ca97fe0a155bae2ff83699d6c1cf69e9926b5c9))
+* **pipeline:** name the build cache when a lockfile kind is missing ([#166](https://github.com/maxbec/pipeline/issues/166)) ([e5cc38e](https://github.com/maxbec/pipeline/commit/e5cc38e1df61c40c7f2663335e480187247e6be4))
+
+
+### ⚡ Performance
+
+* **train:** run the train on ubuntu-slim and rerun only what a rerun can cure ([#163](https://github.com/maxbec/pipeline/issues/163)) ([1348a80](https://github.com/maxbec/pipeline/commit/1348a80764482d04615d0452c8ccaa88294b6913))
+* **pipeline:** keep caches warm on hosted runners and skip no-op Train runs ([#161](https://github.com/maxbec/pipeline/issues/161)) ([834c1b4](https://github.com/maxbec/pipeline/commit/834c1b476d99ccb019acbc19d3ffd24082ed161d))
+
 ## [5.6.0-beta.4](https://github.com/maxbec/pipeline/compare/v5.6.0-beta.3...v5.6.0-beta.4) (2026-11-16)
 
 
