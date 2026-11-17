@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.7.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.7.0...v5.7.1-beta.1) (2026-11-17)
+
+
+### 🐛 Bug Fixes
+
+* **trunk-upgrade:** fall back to GITHUB_TOKEN when the App is gone ([#184](https://github.com/maxbec/pipeline/issues/184)) ([c1ff959](https://github.com/maxbec/pipeline/commit/c1ff95913b88db69c130be0a87bc8ab91f65982a))
+
 ## [5.7.0](https://github.com/maxbec/pipeline/compare/v5.6.1...v5.7.0) (2026-11-17)
 
 
