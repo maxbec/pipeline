@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.7.0](https://github.com/maxbec/pipeline/compare/v5.6.1...v5.7.0) (2026-11-17)
+
+
+### ✨ Features
+
+* **runner:** a switch that moves the one-core jobs to ubuntu-latest ([#181](https://github.com/maxbec/pipeline/issues/181)) ([fb704a9](https://github.com/maxbec/pipeline/commit/fb704a9e06f2d8d58a5151e516ee3fe501b7a64b))
+
+
+### 🐛 Bug Fixes
+
+* **maintenance:** make the weekly workflow lint pass again ([#179](https://github.com/maxbec/pipeline/issues/179)) ([a72cdbd](https://github.com/maxbec/pipeline/commit/a72cdbdd807990f137d7bd6d600d93b0c2511a22))
+
 ## [5.7.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.6.1...v5.7.0-beta.1) (2026-11-17)
 
 
