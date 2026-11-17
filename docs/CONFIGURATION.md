@@ -80,6 +80,25 @@ release: # optional; read by the Train workflow, validated by Guard
 | Deploy | `deploy`, `runtime`, `stack` | `runner.labels` |
 | Train (second workflow) | `release` | Train, Fix (triage) and Fix (commit): `vars.PIPELINE_RUNNER` in a private repository, else ubuntu-slim. Fix (propose): always ubuntu-latest |
 
+**When GitHub hands out no ubuntu-slim runner**, set the variable
+**`PIPELINE_SLIM`** = `off` on the repository (or the organization): every job
+the table lists on ubuntu-slim then runs on ubuntu-latest, at three times the
+price per minute. Any other value, or none, means ubuntu-slim. The sign is a
+Guard that stays queued and is cancelled after 15 minutes with "The job was not
+acquired by Runner of type hosted even after multiple attempts" while jobs on
+ubuntu-latest start at once (2026-11-17, 45 minutes). Guard is the first job,
+so until then no Check runs. Delete the variable when the outage is over, and
+re-run what it cancelled:
+
+```sh
+gh variable set PIPELINE_SLIM --body off -R <owner/repo>
+gh run rerun <run id> --failed -R <owner/repo>
+gh variable delete PIPELINE_SLIM -R <owner/repo>
+```
+
+The switch chooses between those two hosted labels and names none of its own,
+so it cannot point a public repository at a self-hosted runner.
+
 The pipeline has four jobs. Guard runs every time. Check runs on everything but
 a release, Deploy only on a published release. The fourth, **Recheck Release
 PR**, starts only after a green full Check on a `workflow_dispatch` or a
@@ -242,7 +261,8 @@ Controls:
   Fix, below.
 
 The train runs on `vars.PIPELINE_RUNNER` in a private repository that sets
-it; otherwise, and always in a public one, on GitHub's one-core `ubuntu-slim`.
+it; otherwise, and always in a public one, on GitHub's one-core `ubuntu-slim`
+(ubuntu-latest while `PIPELINE_SLIM` is `off`, see "What each job reads").
 
 ### What becomes a release
 
@@ -360,8 +380,9 @@ repositories only.
 
 ## Repository variables and secrets
 
-Variables (`vars.*`): `PIPELINE_RUNNER` (JSON array of labels) and `TRAIN`
-(`off` stops the train, see above). In a Free org,
+Variables (`vars.*`): `PIPELINE_RUNNER` (JSON array of labels), `PIPELINE_SLIM`
+(`off` moves the one-core jobs to ubuntu-latest) and `TRAIN` (`off` stops the
+train, see above). In a Free org,
 org-level values are invisible to private repositories: set it per repository.
 The `INFISICAL_*` variables are no longer read.
 
