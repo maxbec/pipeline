@@ -76,6 +76,11 @@ jobs:
         # never generated. Gate on a prior step output instead (secrets are not
         # allowed directly in step `if:` expressions).
         if: steps.check-app.outputs.available == 'true'
+        # Secrets can outlive their App. A deleted App answers "Integration not
+        # found", one that is no longer installed here "Not Found" (both seen
+        # 2026-11). Neither is a reason for a red weekly run: the next step
+        # falls back to GITHUB_TOKEN and says so.
+        continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v2.1.4
         with:
           app-id: ${{ secrets.WORKFLOW_APP_ID }}
@@ -86,15 +91,20 @@ jobs:
         shell: bash
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_CONFIGURED: ${{ steps.check-app.outputs.available }}
           FALLBACK: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ -n "$APP_TOKEN" ]]; then
             echo "value=$APP_TOKEN" >> "$GITHUB_OUTPUT"
             echo "using=app" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "value=$FALLBACK" >> "$GITHUB_OUTPUT"
+          echo "using=github-token" >> "$GITHUB_OUTPUT"
+          if [[ "$APP_CONFIGURED" == "true" ]]; then
+            echo "::warning::WORKFLOW_APP_ID and WORKFLOW_APP_PRIVATE_KEY are set, but GitHub issued no token for them: the App was deleted or is not installed on this repository. Using GITHUB_TOKEN instead; the upgrade PR starts no Check and will not merge by itself. Replace or delete the two secrets."
           else
-            echo "value=$FALLBACK" >> "$GITHUB_OUTPUT"
-            echo "using=github-token" >> "$GITHUB_OUTPUT"
             echo "::notice::WORKFLOW_APP_ID not set; using GITHUB_TOKEN. PRs will not auto-merge."
           fi
 
