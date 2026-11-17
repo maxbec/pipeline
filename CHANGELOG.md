@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.6.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.6.0...v5.6.1-beta.1) (2026-11-17)
+
+
+### 🐛 Bug Fixes
+
+* **callers:** write the cron values without quotes they do not need ([#175](https://github.com/maxbec/pipeline/issues/175)) ([857cbcd](https://github.com/maxbec/pipeline/commit/857cbcdcf0e3a169346c49a9d130a0a8aeb7f4fc))
+
 ## [5.6.0](https://github.com/maxbec/pipeline/compare/v5.5.3...v5.6.0) (2026-11-16)
 
 
