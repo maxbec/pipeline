@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -17,6 +18,24 @@ test("the rendered caller stays within yamllint's 120 characters, even with a pr
   assert.match(uses, /@a{40}$/, "the uses line ends with the sha; the tag sits in a comment above it")
   const idx = rendered.split("\n").indexOf(uses)
   assert.match(rendered.split("\n")[idx - 1], /^\s*# v5\.0\.0-beta\.12$/)
+})
+
+// yamllint's `quoted-strings: required: only-when-needed`, which the navigaite
+// Trunk plugin sets: a value in quotes that reads the same without them is an
+// error. The v5.6.0 pin failed `Lint (trunk)` in four navigaite repositories on
+// `- cron: '17 */6 * * *'` — the cron it replaced began with `*`, which needs
+// the quotes; this one does not.
+test("a caller quotes a value only where YAML needs the quotes", () => {
+  for (const file of ["caller.yaml", "train-caller.yaml"]) {
+    const lines = readFileSync(join(ROOT, ".github/workflows/examples", file), "utf8").split("\n")
+    for (const [i, line] of lines.entries()) {
+      const quoted = line.match(/^\s*(?:- )?(?:[\w-]+: )?(['"])(.*)\1\s*$/)
+      if (!quoted || /^\s*#/.test(line)) continue
+      const plain = spawnSync("yq", ["-o=json", "."], { input: `v: ${quoted[2]}\n`, encoding: "utf8" })
+      const same = plain.status === 0 && JSON.parse(plain.stdout).v === quoted[2]
+      assert.ok(!same, `${file}:${i + 1} quotes a value that needs none: ${line.trim()}`)
+    }
+  }
 })
 
 test("the caller grants every permission a pipeline job asks for", () => {
