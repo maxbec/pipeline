@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.7.1-beta.2](https://github.com/maxbec/pipeline/compare/v5.7.1-beta.1...v5.7.1-beta.2) (2026-11-17)
+
+
+### 🐛 Bug Fixes
+
+* **trunk-upgrade:** keep the repository's git hooks out of the bot commit ([#187](https://github.com/maxbec/pipeline/issues/187)) ([5665bde](https://github.com/maxbec/pipeline/commit/5665bde8af47414612251bd7a5840808b5e48066))
+
 ## [5.7.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.7.0...v5.7.1-beta.1) (2026-11-17)
 
 
