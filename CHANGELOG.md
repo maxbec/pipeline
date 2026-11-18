@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.7.3-beta.1](https://github.com/maxbec/pipeline/compare/v5.7.2...v5.7.3-beta.1) (2026-11-18)
+
+
+### 🐛 Bug Fixes
+
+* **check:** scan a reused pull request's commits, save the dependency cache from dispatch and schedule ([#194](https://github.com/maxbec/pipeline/issues/194)) ([0ee1bba](https://github.com/maxbec/pipeline/commit/0ee1bba1a06ba4a21b1d3f2a4d43c69c7bdc7cc2))
+
 ## [5.7.2](https://github.com/maxbec/pipeline/compare/v5.7.1...v5.7.2) (2026-11-18)
 
 
