@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.7.2](https://github.com/maxbec/pipeline/compare/v5.7.1...v5.7.2) (2026-11-18)
+
+
+### 🐛 Bug Fixes
+
+* **guard:** a promotion stands on a full Check, never on a fast push run ([#190](https://github.com/maxbec/pipeline/issues/190)) ([35e2df8](https://github.com/maxbec/pipeline/commit/35e2df8c0f74d64ee3d33e142f74e34c1c7949d0))
+
 ## [5.7.2-beta.1](https://github.com/maxbec/pipeline/compare/v5.7.1...v5.7.2-beta.1) (2026-11-18)
 
 
