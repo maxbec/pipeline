@@ -18,7 +18,9 @@ after a squash merge into an unmoved base, the promotion PR, `main` after it,
 `dev` after the Release PR. Every passing Check therefore uploads a marker
 artifact `pipeline-checked-tree-<tree sha>` (30 days). Guard looks the tree of
 the commit up first; a marker from this repository's own `ci.yaml` run, not a
-fork's, lets Check report that result on a hosted runner in seconds. Measured on
+fork's, lets Check report that result on a hosted runner in seconds. The one
+thing a tree cannot vouch for is the secret scan, which reads commits: a pull
+request whose commits no marked run saw is still scanned. Measured on
 navigaite/crewsy, 12–14 October 2026: of 2,430 runner minutes, 13 % went to the
 release flow's re-checks and part of the 29 % of pushes to `dev`.
 
