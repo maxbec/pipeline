@@ -387,9 +387,10 @@ jobs:
       # hotfix (it goes straight into main), and a Release PR or a promotion
       # that has to be checked itself: the one is more than its base plus a
       # version, the other meets commits of its own on the base. Neither may
-      # go green on the fast suite. Only the two events named here are fast;
-      # anything else is full, and so is every run of a repository without a
-      # pr_command.
+      # go green on the fast suite, and neither may `dev` opened into `main`
+      # by hand: Guard admits that head, and it is a promotion without the
+      # train. Only the two events named here are fast; anything else is
+      # full, and so is every run of a repository without a pr_command.
       - name: How deep does this Check go?
         id: depth
         shell: bash
@@ -397,6 +398,7 @@ jobs:
           FAST_MODE: ${{ steps.config.outputs.fast-mode }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
           depth=full
@@ -406,6 +408,7 @@ jobs:
               pull_request)
                 case "${HEAD_REF:-}" in
                   hotfix/*|release/*|promote/*) ;;
+                  dev) [[ "${BASE_REF:-}" == "main" ]] || depth=fast ;;
                   *) depth=fast ;;
                 esac
                 ;;
@@ -553,9 +556,14 @@ jobs:
       # the answer is `unverified`: Check fails at once, names the command
       # that runs the full Check, and runs nothing. That is never a reuse. A
       # Release PR that is more than its base plus a version is checked
-      # itself, in full ("How deep does this Check go?"). The promotion's
-      # rule is unchanged: it stands on the push run of the Release it
-      # promotes. Where that fails, its own Check is a full one too.
+      # itself, in full ("How deep does this Check go?"). A promotion asks
+      # for the same proof, one step further back: the Release it promotes
+      # was pushed to the other branch, and that push ran the fast Check. Its
+      # own tree has to carry a full marker, or the Release has to be one
+      # version commit over a tree that does (the tip its Release PR stood
+      # on), so that the head is that tree plus versions and the changelog.
+      # Where neither holds, an API error included, the promotion is not
+      # `unverified`: its own Check runs, and that is a full one.
       - name: Is this a Release PR over a green base?
         id: reuse
         if: >-
@@ -594,13 +602,20 @@ jobs:
             GREEN_SHA="$parent"; GREEN_NAME="the promoted Release"; GREEN_BRANCH=""
           fi
           compare=$(mktemp)
-          gh api "repos/$REPO/compare/$GREEN_SHA...$HEAD_SHA" > "$compare" 2>/dev/null || full "the compare API did not answer"
-          verdict=$(VERSION="$VERSION" COMPARE="$compare" python3 - 2>&1 <<'PY'
+          # Says why not, unless the head is exactly $2 commits over $1 and
+          # every changed line outside CHANGELOG.md only swaps a version for
+          # the one the title names.
+          version_only() {
+            gh api "repos/$REPO/compare/$1...$HEAD_SHA" > "$compare" 2>/dev/null || { echo "the compare API did not answer"; return 1; }
+            VERSION="$VERSION" COMPARE="$compare" AHEAD="$2" python3 - 2>&1 <<'PY'
           import json, os, re, sys
           c = json.load(open(os.environ["COMPARE"]))
           v = os.environ["VERSION"]
-          if c.get("status") != "ahead" or c.get("ahead_by") != 1 or c.get("behind_by") != 0:
-              sys.exit("the head is not exactly one commit over the base tip")
+          ahead = int(os.environ["AHEAD"])
+          if c.get("status") != "ahead" or c.get("ahead_by") != ahead or c.get("behind_by") != 0:
+              if ahead == 1:
+                  sys.exit("the head is not exactly one commit over the base tip")
+              sys.exit("the head is not exactly %d commits over the commit its Release was cut from" % ahead)
           if len(c.get("files", [])) >= 300:
               sys.exit("the compare API lists at most 300 files, so this diff may be cut short")
           sem = re.compile(r"v?\d+\.\d+\.\d+(?:-[A-Za-z][A-Za-z0-9]*(?:\.\d+)?)?")
@@ -630,7 +645,26 @@ jobs:
               if len(minus) != len(plus) or not all(bumped(o, n) for o, n in zip(minus, plus)):
                   sys.exit(name + " changes more than its version")
           PY
-          ) || full "$verdict"
+          }
+          verdict=$(version_only "$GREEN_SHA" 1) || full "$verdict"
+          # Prints the run that left a live full marker for tree $1. The same
+          # conditions as "Was this tree checked green before?": from this
+          # repository's own pipeline, never from a fork. Status 1: there is
+          # none. Status 2: the artifacts API did not answer.
+          full_marker() {
+            local runs run path
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$1&per_page=100" \
+              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
+                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
+                    | unique | .[]' 2>/dev/null) || return 2
+            for run in $runs; do
+              path=$(gh api "repos/$REPO/actions/runs/$run" --jq '.path' 2>/dev/null) || continue
+              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+              echo "$run"
+              return 0
+            done
+            return 1
+          }
           if [[ "${FAST_MODE:-}" == "true" && "${HEAD_REF:-}" == release/* ]]; then
             # Fails closed: an API that does not answer is "not verified" too.
             # Re-running all jobs of this run asks again.
@@ -643,22 +677,42 @@ jobs:
               || unverified "the commits API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
             [[ "$green_tree" =~ ^[0-9a-f]{40}$ ]] \
               || unverified "${GREEN_SHA:0:7} names no tree, so nothing shows that $GREEN_NAME passed the full Check"
-            # The same conditions as "Was this tree checked green before?":
-            # live, from this repository's own pipeline, never from a fork.
-            runs=$(gh api "repos/$REPO/actions/artifacts?name=pipeline-checked-tree-$green_tree&per_page=100" \
-              --jq '[.artifacts[] | select(.expired == false and .workflow_run.repository_id != null
-                      and .workflow_run.head_repository_id == .workflow_run.repository_id) | .workflow_run.id]
-                    | unique | .[]' 2>/dev/null) \
+            found=0; run=$(full_marker "$green_tree") || found=$?
+            [[ "$found" != "2" ]] \
               || unverified "the artifacts API did not answer, so nothing shows that $GREEN_NAME at ${GREEN_SHA:0:7} passed the full Check"
-            for run in $runs; do
-              path=$(gh api "repos/$REPO/actions/runs/$run" --jq '.path' 2>/dev/null) || continue
-              [[ "$path" == ".github/workflows/ci.yaml" ]] || continue
+            if [[ "$found" == "0" ]]; then
               note="The full Check passed on $GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}, run $run); this head adds only the version and the changelog, so that result stands."
               { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
               echo "Reusing the full Check of $GREEN_NAME at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
               exit 0
-            done
+            fi
             unverified "$GREEN_NAME at ${GREEN_SHA:0:7} (tree ${green_tree:0:7}) has not passed the full Check"
+          fi
+          if [[ "${FAST_MODE:-}" == "true" && "${HEAD_REF:-}" == promote/* ]]; then
+            # Fails closed, into the promotion's own full Check.
+            release=$(gh api "repos/$REPO/git/commits/$GREEN_SHA" --jq '[.tree.sha, (.parents | length), (.parents[0].sha // "")] | @tsv' 2>/dev/null) \
+              || full "the commits API did not answer, so nothing shows that the promoted Release at ${GREEN_SHA:0:7} passed the full Check"
+            IFS=$'\t' read -r release_tree release_parents cut <<< "$release"
+            [[ "$release_tree" =~ ^[0-9a-f]{40}$ ]] || full "${GREEN_SHA:0:7} names no tree, so nothing shows that the promoted Release passed the full Check"
+            if run=$(full_marker "$release_tree"); then
+              note="The full Check passed on the promoted Release at ${GREEN_SHA:0:7} (tree ${release_tree:0:7}, run $run); this head adds only the version and the changelog, so that result stands."
+              { echo "reuse=true"; echo "base-sha=$GREEN_SHA"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "Reusing the full Check of the promoted Release at ${GREEN_SHA:0:7}: the head only writes $VERSION and the changelog."
+              exit 0
+            fi
+            [[ "$release_parents" == "1" && "$cut" =~ ^[0-9a-f]{40}$ ]] \
+              || full "the promoted Release at ${GREEN_SHA:0:7} has not passed the full Check and is not one commit over another"
+            verdict=$(version_only "$cut" 2) || full "the promoted Release at ${GREEN_SHA:0:7} has not passed the full Check, and $verdict"
+            cut_tree=$(gh api "repos/$REPO/git/commits/$cut" --jq '.tree.sha' 2>/dev/null) \
+              || full "the commits API did not answer, so nothing shows that ${cut:0:7} passed the full Check"
+            [[ "$cut_tree" =~ ^[0-9a-f]{40}$ ]] || full "${cut:0:7} names no tree, so nothing shows that it passed the full Check"
+            if run=$(full_marker "$cut_tree"); then
+              note="The full Check passed at ${cut:0:7} (tree ${cut_tree:0:7}, run $run), the commit the promoted Release ${GREEN_SHA:0:7} was cut from; the Release and this head add only the version and the changelog, so that result stands."
+              { echo "reuse=true"; echo "base-sha=$cut"; echo "note=$note"; } >> "$GITHUB_OUTPUT"
+              echo "Reusing the full Check of ${cut:0:7}: the promoted Release and the head only write versions and the changelog."
+              exit 0
+            fi
+            full "neither the promoted Release at ${GREEN_SHA:0:7} nor the commit it was cut from (${cut:0:7}) has passed the full Check"
           fi
           runs=$(gh api "repos/$REPO/actions/runs?head_sha=$GREEN_SHA&event=push$GREEN_BRANCH&per_page=20" \
             --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yaml" and .conclusion == "success")] | length' 2>/dev/null) \

@@ -119,18 +119,20 @@ stays the whole suite.
 
 | run | depth | test command |
 |---|---|---|
-| pull request, any head but `hotfix/*`, `release/*` and `promote/*` | fast | `test.pr_command` |
+| pull request, any head but `hotfix/*`, `release/*`, `promote/*` and `dev` into `main` | fast | `test.pr_command` |
 | push to `dev` / `main` | fast | `test.pr_command` |
-| pull request from `hotfix/*` | full | `test.command` |
+| pull request from `hotfix/*`, or from `dev` into `main` (a promotion opened by hand) | full | `test.command` |
 | `workflow_dispatch`, `schedule` | full | `test.command` |
 | Release PR (`release/*` head) | none of its own: green only when the tip of its base branch has passed the full Check, otherwise red at once as "not fully verified" | |
-| promotion (`promote/*` head) | none of its own, as before: it stands on the green push run of the Release it promotes | |
+| promotion (`promote/*` head) | none of its own when the Release it promotes has passed the full Check: its own tree carries a full marker, or it is one version commit over a tree that does. Otherwise it is checked itself, in full | `test.command` when checked itself |
 
 So **a Release PR is green only when the tip of its base branch has passed the
 full Check.** A Release PR that is more than its base tip plus a version (a
 commit by hand, a base that moved on) is checked itself, in full. So is a
-promotion that cannot stand on the Release it promotes, because the base has
-commits of its own: what goes to production never goes green on the fast suite.
+promotion that cannot stand on the Release it promotes: the base has commits
+of its own, or nothing shows that the Release passed the full Check (the push
+of a Release to `dev` runs the fast Check, and a promotion does not stand on
+that). What goes to production never goes green on the fast suite.
 
 **`PIPELINE_DEPTH`** is `fast` or `full` in the environment of the Lint, Test
 and Build steps, for the repository's own scripts (a build that skips an

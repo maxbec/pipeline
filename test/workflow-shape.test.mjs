@@ -383,6 +383,8 @@ test("Guard names the depth before either reuse step and hands it to Check", () 
     FAST_MODE: "${{ steps.config.outputs.fast-mode }}",
     EVENT_NAME: "${{ github.event_name }}",
     HEAD_REF: "${{ github.event.pull_request.head.ref }}",
+    // dev opened into main is a promotion by hand: full, like the train's.
+    BASE_REF: "${{ github.event.pull_request.base.ref }}",
   })
   assert.equal(guard.outputs.depth, "${{ steps.depth.outputs.depth }}")
   assert.equal(guard.outputs["fast-mode"], "${{ steps.config.outputs.fast-mode }}")
