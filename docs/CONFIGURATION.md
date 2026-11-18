@@ -14,7 +14,7 @@ stack: auto # nodejs | python | none | auto
 runtime:
   node_version: '' # default: .nvmrc, then .node-version, then package.json engines.node, then lts/*
   python_version: '3.12'
-  dependency_cache: true # default: true on a GitHub-hosted runner, false when the runner labels contain self-hosted (its package store outlives the job, and saving the cache uploads gigabytes over the runner's own uplink). Restored on every run, saved only by a push to dev/main: a pull request reads its base branch's copy and stores none of its own. Also switches trunk's cache
+  dependency_cache: true # default: true on a GitHub-hosted runner, false when the runner labels contain self-hosted (its package store outlives the job, and saving the cache uploads gigabytes over the runner's own uplink). Restored on every run, saved by every run but a pull request's that installed (a push to dev/main, a dispatch, the nightly schedule): a pull request reads its base branch's copy and stores none of its own, and a push that reused its pull request's result installs nothing to save. Also switches trunk's cache
   build_cache: false # true: Check restores ~/.cache/pipeline-build-cache on every run and saves it after Build on every run but a pull request's, so a push to dev/main and the full Check by dispatch or by night (a new entry per run, keyed by OS, Node and lockfile, falling back to the newest older one). The path is exported as PIPELINE_BUILD_CACHE_DIR; point a task runner's cache there (turbo: TURBO_CACHE_DIR). The repository decides what is in it and proves that replaying it is safe. Off whenever dependency_cache is
 
 runner:
@@ -147,6 +147,14 @@ there was before, so older markers count as full. A full run stands down only
 for a full marker, a fast run for either. A Release PR that stood on its
 base's full marker leaves the fast name for its own tree, and so does a
 promotion that stood on the Release it promotes.
+
+**The secret scan reads commits, not the tree.** Lint, test and build depend
+on the tree alone, so a marker settles them. A secret added in one commit and
+removed in the next leaves the tree where it started. A pull request whose
+tree carries a marker is therefore reused in full only when a marked run saw
+its very head commit; otherwise Check still checks the pull request out and
+scans its commits, and runs nothing else. A push stands on the scan of the
+pull request it merged.
 
 **Starting a full run.** The caller listens for `workflow_dispatch`, and where
 `test.pr_command` is set also for a nightly `schedule` (`23 2 * * *`, on the
