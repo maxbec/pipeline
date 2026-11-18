@@ -12,6 +12,7 @@ import { runStep, scratch } from "./helpers.mjs"
 // and for each marker's run (`markerRuns`, by run id).
 function fakeGh({
   compare,
+  compares = {},
   runs,
   commits = {},
   markers = {},
@@ -23,6 +24,7 @@ function fakeGh({
 }) {
   const dir = scratch("gh-")
   writeFileSync(join(dir, "compare.json"), JSON.stringify(compare))
+  for (const [range, c] of Object.entries(compares)) writeFileSync(join(dir, `compare-${range}.json`), JSON.stringify(c))
   writeFileSync(join(dir, "runs.json"), JSON.stringify({ workflow_runs: runs }))
   writeFileSync(join(dir, "no-artifacts.json"), JSON.stringify({ total_count: 0, artifacts: [] }))
   for (const [name, artifacts] of Object.entries(markers)) {
@@ -36,7 +38,10 @@ function fakeGh({
 path="$2"
 echo "$path" >> "${dir}/calls"
 case "$path" in
-  */compare/*) ${failCompare ? "exit 1" : `cat "${dir}/compare.json"`} ;;
+  */compare/*)
+    ${failCompare ? "exit 1" : "true"}
+    f="${dir}/compare-\${path##*/compare/}.json"; [[ -f "$f" ]] || f="${dir}/compare.json"
+    cat "$f" ;;
   */actions/artifacts\\?name=*)
     ${failArtifacts ? "exit 1" : "true"}
     name="\${path#*name=}"; name="\${name%%&*}"
@@ -300,17 +305,109 @@ test("fast mode: a Release PR that is more than its base plus a version is check
   }
 })
 
-test("fast mode: the promotion rule is unchanged and stands on the push run of the Release it promotes", () => {
-  const stable = { filename: "package.json", status: "modified", patch: patch([['  "version": "0.35.0-beta.1",', '  "version": "0.35.0",']]) }
-  const r = promotion({ compare: releaseCompare([stable, changelog]), env: { FAST_MODE: "true" } })
+// A promotion in fast mode. The Release it promotes was pushed to the other
+// branch, and that push ran the fast Check: production must not stand on it.
+// The Release counts as fully checked when its own tree carries a full marker
+// (a nightly or a dispatched run of that branch), or when it is one version
+// commit over a tree that does: the commit its Release PR was cut from.
+const RELEASE_TREE = "5".repeat(40)
+const CUT = "f".repeat(40)
+const CUT_TREE = "6".repeat(40)
+const FULL_RELEASE = `pipeline-checked-tree-${RELEASE_TREE}`
+const FULL_CUT = `pipeline-checked-tree-${CUT_TREE}`
+const stableBump = { filename: "package.json", status: "modified", patch: patch([['  "version": "0.35.0-beta.1",', '  "version": "0.35.0",']]) }
+const sinceCut = { filename: "package.json", status: "modified", patch: patch([['  "version": "0.34.2",', '  "version": "0.35.0",']]) }
+const twoOverCut = (files) => ({ status: "ahead", ahead_by: 2, behind_by: 0, files })
+const fastPromotion = ({ commits = {}, compares = {}, ...over } = {}) =>
+  promotion({
+    compare: releaseCompare([stableBump, changelog]),
+    compares: { [`${CUT}...${HEAD}`]: twoOverCut([sinceCut, changelog]), ...compares },
+    commits: {
+      ...promotionCommits,
+      [RELEASE]: { tree: { sha: RELEASE_TREE }, parents: [{ sha: CUT }] },
+      [CUT]: { tree: { sha: CUT_TREE }, parents: [{ sha: "9".repeat(40) }] },
+      ...commits,
+    },
+    env: { FAST_MODE: "true" },
+    ...over,
+  })
+
+test("fast mode: a promotion does not stand on the fast push run of the Release it promotes", () => {
+  const r = fastPromotion({ runs: [greenRun] })
+  assert.equal(r.outputs.reuse, "false", "a green push run is a fast Check")
+  assert.equal(r.outputs.unverified, undefined, "a promotion is checked itself (in full: Guard's depth step), never unverified")
+  assert.equal(r.outputs["base-sha"], undefined)
+  assert.ok(!r.calls.some((c) => c.includes("actions/runs?head_sha=")), "the push run is not even asked for")
+  assert.match(r.stdout, /Full Check: neither the promoted Release at ddddddd nor the commit it was cut from \(fffffff\) has passed the full Check/)
+})
+
+test("fast mode: a promotion reuses the full Check of the Release's own tree", () => {
+  const r = fastPromotion({ markers: { [FULL_RELEASE]: [artifact(51)] }, markerRuns: { 51: ciRun } })
+  assert.equal(r.outputs.reuse, "true")
+  assert.equal(r.outputs["base-sha"], RELEASE)
+  assert.equal(
+    r.outputs.note,
+    "The full Check passed on the promoted Release at ddddddd (tree 5555555, run 51); this head adds only the version and the changelog, so that result stands.",
+  )
+  assert.ok(!r.calls.some((c) => c.includes(`/compare/${CUT}...`)), "the commit before the Release is not needed")
+})
+
+test("fast mode: a promotion reuses the full Check of the commit its Release was cut from", () => {
+  const r = fastPromotion({ markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: { 52: ciRun } })
   assert.equal(r.outputs.reuse, "true")
   assert.equal(r.outputs.unverified, undefined)
-  assert.equal(r.outputs["base-sha"], RELEASE)
-  assert.match(r.outputs.note, /^Lint, test and build passed on the promoted Release at ddddddd; /)
+  assert.equal(r.outputs["base-sha"], CUT, "the green commit is the one that ran the full Check")
+  assert.equal(
+    r.outputs.note,
+    "The full Check passed at fffffff (tree 6666666, run 52), the commit the promoted Release ddddddd was cut from; the Release and this head add only the version and the changelog, so that result stands.",
+  )
+  assert.ok(r.calls.some((c) => c.includes(`/compare/${CUT}...${HEAD}`)), "the whole way from that commit to the head is compared")
+  assert.ok(!r.calls.some((c) => c.includes("pipeline-fast-tree")), "the fast name is never asked for")
+})
+
+test("fast mode: a promotion whose Release is more than a version over a fully checked commit is checked itself", () => {
+  const marked = { markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: { 52: ciRun } }
+  const code = { filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }
+  const cases = {
+    "the Release carries code": { compares: { [`${CUT}...${HEAD}`]: twoOverCut([sinceCut, changelog, code]) } },
+    "the Release is more than one commit over it": { compares: { [`${CUT}...${HEAD}`]: { ...twoOverCut([sinceCut, changelog]), ahead_by: 3 } } },
+    "the Release is a merge": { commits: { [RELEASE]: { tree: { sha: RELEASE_TREE }, parents: [{ sha: CUT }, { sha: "9".repeat(40) }] } } },
+    "the Release has no parent": { commits: { [RELEASE]: { tree: { sha: RELEASE_TREE }, parents: [] } } },
+  }
+  for (const [why, gh] of Object.entries(cases)) {
+    const r = fastPromotion({ ...marked, ...gh })
+    assert.equal(r.outputs.reuse, "false", why)
+    assert.equal(r.outputs.unverified, undefined, why)
+  }
+})
+
+test("fast mode: only a live full marker from this repository's own pipeline verifies a promotion", () => {
+  const cases = {
+    "only a fast marker": { markers: { [`pipeline-fast-tree-${CUT_TREE}`]: [artifact(52)], [`pipeline-fast-tree-${RELEASE_TREE}`]: [artifact(52)] }, markerRuns: { 52: ciRun } },
+    "a fork's pull request uploaded it": { markers: { [FULL_CUT]: [artifact(52, { headRepo: 2 })] }, markerRuns: { 52: ciRun } },
+    "it expired": { markers: { [FULL_CUT]: [artifact(52, { expired: true })] }, markerRuns: { 52: ciRun } },
+    "another workflow uploaded it": { markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: { 52: { path: ".github/workflows/other.yaml" } } },
+    "its run is gone": { markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: {} },
+    "the artifacts API does not answer": { markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: { 52: ciRun }, failArtifacts: true },
+    "the commits API does not answer": { markers: { [FULL_CUT]: [artifact(52)] }, markerRuns: { 52: ciRun }, failCommits: true },
+  }
+  for (const [why, gh] of Object.entries(cases)) {
+    const r = fastPromotion(gh)
+    assert.equal(r.outputs.reuse, "false", why)
+    assert.equal(r.outputs.unverified, undefined, `checked itself, in full, never unverified: ${why}`)
+    assert.equal(r.status, 0, why)
+  }
+})
+
+test("fast mode: a promotion that carries code is still checked itself, whatever is marked", () => {
+  const code = { filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }
+  const r = fastPromotion({
+    compare: releaseCompare([stableBump, changelog, code]),
+    markers: { [FULL_RELEASE]: [artifact(51)], [FULL_CUT]: [artifact(52)] },
+    markerRuns: { 51: ciRun, 52: ciRun },
+  })
+  assert.equal(r.outputs.reuse, "false")
   assert.ok(!r.calls.some((c) => c.includes("actions/artifacts")), "no marker is asked for")
-  const never = promotion({ runs: [], env: { FAST_MODE: "true" } })
-  assert.equal(never.outputs.reuse, "false")
-  assert.equal(never.outputs.unverified, undefined, "a promotion is checked (in full: Guard's depth step), never unverified")
 })
 
 test("without test.pr_command a Release PR stands on its base's green push run, exactly as before", () => {
