@@ -34,6 +34,12 @@ test("the depth table: fast for pull requests and pushes, full where a release d
     // So is a promotion whose reuse fails: main has commits of its own, and
     // what goes to production does not go green on the fast suite.
     [{ EVENT_NAME: "pull_request", HEAD_REF: "promote/main" }, "full"],
+    // dev opened into main by hand is a promotion without the train: what
+    // reaches production does not go green on the fast suite either.
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "dev", BASE_REF: "main" }, "full"],
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "dev", BASE_REF: "staging" }, "fast"], // only into main
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/x", BASE_REF: "main" }, "fast"], // a main-only repository's feature PR
+    [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/dev", BASE_REF: "main" }, "fast"], // only the branch named dev
     [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/promote/main" }, "fast"], // only a head that starts with it
     [{ EVENT_NAME: "pull_request", HEAD_REF: "feat/release/x" }, "fast"],
   ]
