@@ -66,6 +66,53 @@ test("a tree a passing Check marked before is not checked again", () => {
   )
 })
 
+// Lint, test and build depend on the tree alone; the secret scan reads
+// commits. A pull request can end on a tree that passed before with commits
+// no marked run ever saw (a secret added, then removed). The result stands,
+// and `scan` has Check scan those commits all the same.
+const HEAD = "e".repeat(40)
+const pr = (gh, env = {}) => lookup(gh, { EVENT_NAME: "pull_request", PR_HEAD_SHA: HEAD, ...env })
+const runAt = (sha) => ({ ...pipelineRun, head_sha: sha })
+
+test("a pull request whose commits no marked run saw is reused, and still scanned for secrets", () => {
+  const r = pr({ artifacts: [marker(7)], runs: { 7: pipelineRun } })
+  assert.equal(r.outputs.reuse, "true")
+  assert.equal(r.outputs.scan, "true")
+  assert.equal(
+    r.outputs.note,
+    "Lint, test and build passed on the identical tree aaaaaaa in run 7 (feat/x at ddddddd), so that result stands. No marked run saw the commits of this pull request, so they are still scanned for secrets.",
+  )
+})
+
+test("a pull request a marked run saw at this very head commit is not scanned again", () => {
+  const same = pr({ artifacts: [marker(7)], runs: { 7: runAt(HEAD) } })
+  assert.equal(same.outputs.reuse, "true")
+  assert.equal(same.outputs.scan, "false")
+  assert.equal(same.outputs.note, "Lint, test and build passed on the identical tree aaaaaaa in run 7 (feat/x at eeeeeee), so that result stands.")
+  const later = pr({ artifacts: [marker(7), marker(8)], runs: { 7: pipelineRun, 8: runAt(HEAD) } })
+  assert.equal(later.outputs.scan, "false", "any marked run at this head will do, not only the first")
+  assert.match(later.outputs.note, /^Lint, test and build passed on the identical tree aaaaaaa in run 7 /, "the note names the first run that counts")
+  const fast = pr({ artifacts: [marker(7)], fastArtifacts: [fastMarker(9)], runs: { 7: pipelineRun, 9: runAt(HEAD) } }, { DEPTH: "fast" })
+  assert.equal(fast.outputs.scan, "false", "a fast marker's run scanned the commits just as well")
+})
+
+test("a run that does not count cannot vouch for the commits either", () => {
+  const r = pr({ artifacts: [marker(7), marker(8)], runs: { 7: pipelineRun, 8: { ...runAt(HEAD), path: ".github/workflows/other.yaml" } } })
+  assert.equal(r.outputs.reuse, "true")
+  assert.equal(r.outputs.scan, "true")
+})
+
+test("a push stands on the scan of the pull request it merged, and a tree without a marker asks for no scan", () => {
+  for (const env of [{}, { EVENT_NAME: "push" }, { EVENT_NAME: "schedule" }, { EVENT_NAME: "workflow_dispatch" }]) {
+    const r = lookup({ artifacts: [marker(7)], runs: { 7: pipelineRun } }, env)
+    assert.equal(r.outputs.reuse, "true", JSON.stringify(env))
+    assert.equal(r.outputs.scan, "false", JSON.stringify(env))
+  }
+  const none = pr({})
+  assert.equal(none.outputs.reuse, "false")
+  assert.equal(none.outputs.scan, undefined, "the Check runs whole, scan included")
+})
+
 test("a tree without a marker runs the full Check and still names its tree for the marker", () => {
   const r = lookup({})
   assert.equal(r.outputs.reuse, "false")

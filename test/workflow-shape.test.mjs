@@ -203,12 +203,29 @@ test("a reused Check runs nothing but its notice and the tree marker, on a hoste
   assert.match(notice.env.NOTE, /needs\.guard\.outputs\.reuse-note/)
   const marker = rest.splice(-2)
   assert.deepEqual(marker.map((s) => s.name), ["Write the tree marker", "Mark the checked tree"])
+  // The one exception: a pull request whose tree passed before with commits
+  // no marked run saw. Its commits are checked out and scanned for secrets;
+  // nothing else runs.
+  assert.equal(check.env.SCAN, "${{ needs.guard.outputs.scan }}")
+  assert.equal(doc.jobs.guard.outputs.scan, "${{ steps.tree.outputs.reuse == 'true' && steps.tree.outputs.scan || 'false' }}")
+  const scanning = {
+    Checkout: "env.REUSE != 'true' || env.SCAN == 'true'",
+    "Secret scan":
+      "(env.REUSE != 'true' || env.SCAN == 'true') && needs.guard.outputs.security == 'true' && needs.guard.outputs.trufflehog == 'true'",
+  }
+  for (const [name, cond] of Object.entries(scanning)) {
+    const hits = rest.filter((s) => s.name === name)
+    assert.equal(hits.length, 1, name)
+    assert.equal(hits[0].if, cond)
+  }
   for (const step of rest) {
+    if (step.name in scanning) continue
     const cond = String(step.if ?? "")
     assert.ok(
       cond.startsWith("env.REUSE != 'true'") || /steps\.test\.outcome == 'failure'/.test(cond),
       `step "${step.name}" runs on a reused Check: if: ${cond || "(none)"}`,
     )
+    assert.ok(!/env\.SCAN/.test(cond), `only the checkout and the secret scan run for SCAN: "${step.name}"`)
   }
 })
 
@@ -239,15 +256,12 @@ test("Node is set up before pnpm, and the dependency cache is saved by pushes on
   assert.equal(saves("check").length, 2, "the dependency cache and the build cache")
   for (const step of saves("check")) {
     assert.match(step.uses, /^actions\/cache\/save@[0-9a-f]{40}$/)
-    // Never from a pull request: its scope is the pull request alone. The
-    // build cache is also saved by the full Check (its own test below).
-    assert.match(
-      String(step.if),
-      step.name === "Save the build cache"
-        ? /github\.event_name != 'pull_request'/
-        : /github\.event_name == 'push'/,
-      `"${step.name}" never saves from a pull request`,
-    )
+    // Never from a pull request: its scope is the pull request alone. Every
+    // other run that installed or built saves: a push after a squash merge
+    // reuses the pull request's result and installs nothing, so the nightly
+    // or a dispatched run is often the first that can save a new lockfile.
+    assert.match(String(step.if), /github\.event_name != 'pull_request'/, `"${step.name}" never saves from a pull request`)
+    assert.doesNotMatch(String(step.if), /github\.event_name == 'push'/, `"${step.name}" saves from a schedule and a dispatch too`)
   }
 })
 
