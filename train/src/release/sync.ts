@@ -519,6 +519,9 @@ async function baseCheckPending(
       return `waiting for ${check.name} on ${at} to start`
     case "running":
       return `waiting for ${check.name} on ${at} to finish`
+    case "cancelled":
+      // Not "waiting for it": nothing starts a cancelled run again by itself.
+      return `${check.name} was cancelled on ${at} and has to be re-run; the Release PR waits for a green ${label}`
     default:
       return `${check.name} is ${check.conclusion} on ${at}; the Release PR waits for a green ${label}${check.state === "failed" ? ifFailed : ""}`
   }
@@ -530,11 +533,21 @@ async function baseCheckPending(
  *
  * `failed` is a Check that ran to its end and did not pass. `skipped` is not
  * that: a commit that only carries a release event's run was never checked.
+ * `cancelled` is not that either: the run was stopped, by a person or by
+ * GitHub for a newer run of its concurrency group, so it says nothing about
+ * the tree and the same commit can pass when it is run again.
+ * It is a state of its own, not `missing`, because nothing starts such a run
+ * again by itself: the gate has to ask for the re-run instead of waiting for
+ * a start. One run that did end and fail makes the commit `failed`, whatever
+ * was cancelled or skipped beside it.
  */
 type CheckReading =
   | { state: "passed" }
-  | { state: "missing" | "running"; name: string }
+  | { state: "missing" | "running" | "cancelled"; name: string }
   | { state: "failed" | "skipped"; name: string; conclusion: string }
+
+/** Conclusions of a run that never checked the tree to the end. */
+const NOT_A_VERDICT = new Set<string | null>(["skipped", "cancelled"])
 
 async function readRequiredChecks(
   client: GitHubClient,
@@ -556,9 +569,12 @@ async function readRequiredChecks(
     if (named.some((r) => r.conclusion === "success")) continue
     if (named.length === 0) return { state: "missing", name }
     if (named.some((r) => r.status !== "completed")) return { state: "running", name }
-    const red = named.find((r) => r.conclusion !== "skipped") ?? named[0]
-    const conclusion = red?.conclusion ?? "unknown"
-    return { state: conclusion === "skipped" ? "skipped" : "failed", name, conclusion }
+    const red = named.find((r) => !NOT_A_VERDICT.has(r.conclusion))
+    if (red) return { state: "failed", name, conclusion: red.conclusion ?? "unknown" }
+    // No run reached a verdict. A cancelled one outranks a skipped one: it is
+    // the one a person can act on.
+    if (named.some((r) => r.conclusion === "cancelled")) return { state: "cancelled", name }
+    return { state: "skipped", name, conclusion: "skipped" }
   }
   return { state: "passed" }
 }
@@ -582,9 +598,11 @@ interface SupersededBeta {
  * Such a beta is superseded: the commits after it become the next beta, which
  * passes every gate on its own commit, like any other.
  *
- * Only a Check that ran to its end counts. One that is missing, running or
- * being rerun may still pass, and a green beta keeps the rule that a
- * docs-only merge is not a release.
+ * Only a Check that ran to its end counts. One that is missing, running,
+ * being rerun or was cancelled may still pass, and a green beta keeps the
+ * rule that a docs-only merge is not a release. This reading is the one a
+ * re-run cannot take back, since the next beta is cut over the old one, so a
+ * cancelled Check must never reach it as `failed`.
  */
 async function supersededBeta(
   client: GitHubClient,

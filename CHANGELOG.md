@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.8.1](https://github.com/maxbec/pipeline/compare/v5.8.0...v5.8.1) (2026-11-19)
+
+
+### 🐛 Bug Fixes
+
+* **train:** read a cancelled Check as cancelled, not as failed ([#203](https://github.com/maxbec/pipeline/issues/203)) ([8735061](https://github.com/maxbec/pipeline/commit/87350617edb424537c0280bbed64fd83c1dae8ab))
+
+## [5.8.1-beta.1](https://github.com/maxbec/pipeline/compare/v5.8.0...v5.8.1-beta.1) (2026-11-19)
+
+
+### 🐛 Bug Fixes
+
+* **train:** read a cancelled Check as cancelled, not as failed ([#203](https://github.com/maxbec/pipeline/issues/203)) ([8735061](https://github.com/maxbec/pipeline/commit/87350617edb424537c0280bbed64fd83c1dae8ab))
+
 ## [5.8.0](https://github.com/maxbec/pipeline/compare/v5.7.3...v5.8.0) (2026-11-19)
 
 
