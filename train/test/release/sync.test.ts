@@ -493,6 +493,61 @@ test("a released base counts its green push run, not the release run's skipped C
   assert.match(((await r.sync(null, null)) as { reason: string }).reason, /is failure on dev/)
 })
 
+const cancelledRun = { status: "completed", conclusion: "cancelled" }
+const skippedRun = { status: "completed", conclusion: "skipped" }
+const failedRun = { status: "completed", conclusion: "failure" }
+const greenRun = { status: "completed", conclusion: "success" }
+
+/**
+ * A cancelled Check did not run to its end: a person stopped the run, or
+ * GitHub did, for a newer run of the same concurrency group. It says nothing
+ * about the tree, and the same commit can pass when the run is started again.
+ */
+test("a cancelled Check on the base tip is not a red one: the Release PR waits and says the Check has to be re-run", async () => {
+  const r = rig("cancelled-base", { files: withPipeline })
+  const tip = r.land("feat: the endpoint (#1)")
+  const needsRerun = {
+    kind: "pending",
+    reason: `pipeline / Check was cancelled on dev at ${tip.slice(0, 7)} and has to be re-run; the Release PR waits for a green dev`,
+  }
+
+  r.gh.refCheckRuns.set(tip, [cancelledRun])
+  assert.deepEqual(await r.sync(null, null), needsRerun)
+  r.gh.refCheckRuns.set(tip, [cancelledRun, cancelledRun])
+  assert.deepEqual(await r.sync(null, null), needsRerun)
+  // Beside a release event's skipped Check it is the cancelled one that says what to do.
+  r.gh.refCheckRuns.set(tip, [cancelledRun, skippedRun])
+  assert.deepEqual(await r.sync(null, null), needsRerun)
+  r.gh.refCheckRuns.set(tip, [skippedRun, cancelledRun])
+  assert.deepEqual(await r.sync(null, null), needsRerun)
+
+  // The re-run, once started, is waited for like any other run.
+  r.gh.refCheckRuns.set(tip, [cancelledRun, { status: "in_progress", conclusion: null }])
+  assert.deepEqual(await r.sync(null, null), {
+    kind: "pending",
+    reason: `waiting for pipeline / Check on dev at ${tip.slice(0, 7)} to finish`,
+  })
+
+  // A Check that did run to its end and failed is red, whichever run came
+  // first, and the reason names the failure, not the cancellation.
+  for (const runs of [
+    [cancelledRun, failedRun],
+    [failedRun, cancelledRun],
+    [cancelledRun, failedRun, skippedRun],
+  ]) {
+    r.gh.refCheckRuns.set(tip, runs)
+    const red = await r.sync(null, null)
+    assert.equal(red.kind, "pending", JSON.stringify(red))
+    assert.match((red as { reason: string }).reason, /is failure on dev .*waits for a green dev$/)
+  }
+  assert.equal(r.gh.pulls.size, 0, "no Release PR over a dev that is not green")
+  assert.equal(r.gh.commits.length, 0)
+
+  // One pass proves the tree, cancelled runs beside it or not.
+  r.gh.refCheckRuns.set(tip, [cancelledRun, greenRun, cancelledRun])
+  assert.equal(pr(await r.sync(null, null)).sourceSha, tip)
+})
+
 /** dev's Release PR merged and tagged, the way the execute stage leaves it. */
 function cutBeta(r: ReturnType<typeof rig>, version: string, number: number): string {
   const { seed } = r
@@ -585,6 +640,61 @@ test("a green, running or merely skipped last beta keeps the rule: a chore-only 
   await nothing("red once, green on the rerun")
   assert.equal(r.gh.pulls.size, 0)
   assert.equal(r.gh.commits.length, 0)
+})
+
+/**
+ * Declaring a beta dead is the one reading that cannot be taken back by a
+ * re-run: the next beta is cut over it. A cancelled Check proves nothing
+ * about the beta's commit, so it must not count as the Check that failed.
+ */
+test("a beta whose Check was only cancelled is not superseded: no Check ran to its end on that commit", async () => {
+  const r = rig("cancelled-beta", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.land("chore(ci): repin the pipeline (#3)")
+
+  const nothing = async (why: string) => {
+    const result = await r.sync(null, null)
+    assert.equal(result.kind, "nothing", `${why}: ${JSON.stringify(result)}`)
+    assert.match(
+      (result as { reason: string }).reason,
+      /^nothing to release on dev since v1\.3\.0-beta\.1: /,
+      why,
+    )
+  }
+  r.gh.refCheckRuns.set(beta, [cancelledRun])
+  await nothing("cancelled")
+  r.gh.refCheckRuns.set(beta, [cancelledRun, cancelledRun])
+  await nothing("cancelled twice")
+  r.gh.refCheckRuns.set(beta, [cancelledRun, skippedRun])
+  await nothing("cancelled, and the release run's skipped Check")
+  r.gh.refCheckRuns.set(beta, [cancelledRun, greenRun])
+  await nothing("cancelled, green when it was run again")
+  assert.equal(r.gh.pulls.size, 0)
+  assert.equal(r.gh.commits.length, 0)
+})
+
+test("a beta with a failed Check beside a cancelled one is superseded, and the Release PR names the failure", async () => {
+  for (const [name, runs] of [
+    ["cancelled-then-failed", [cancelledRun, failedRun, skippedRun]],
+    ["failed-then-cancelled", [failedRun, skippedRun, cancelledRun]],
+  ] as const) {
+    const r = rig(`red-beta-${name}`, { files: withPipeline })
+    r.land("feat: the endpoint (#1)")
+    const beta = cutBeta(r, "1.3.0-beta.1", 2)
+    r.gh.refCheckRuns.set(beta, [...runs])
+    r.land("chore(ci): repin the pipeline (#3)")
+
+    const out = pr(await r.sync(null, null))
+    assert.equal(out.version, "1.3.0-beta.2", name)
+    assert.match(
+      r.gh.pulls.get(out.prNumber)?.body ?? "",
+      new RegExp(
+        `replaces \`v1\\.3\\.0-beta\\.1\`: pipeline / Check is failure on its commit \`${beta.slice(0, 7)}\``,
+      ),
+      name,
+    )
+  }
 })
 
 test("the beta that replaces a red one passes the same gate: its Release PR waits for a green dev tip", async () => {
@@ -702,6 +812,30 @@ test("main waiting on a red beta names the way out: the next beta from dev repla
     kind: "pending",
     reason: `pipeline / Check is skipped on v1.3.0-beta.1 at ${at}; the Release PR waits for a green v1.3.0-beta.1`,
   })
+})
+
+test("main waiting on a beta whose Check was cancelled asks for the re-run and promises no replacement", async () => {
+  const r = rig("cancelled-beta-main", { files: withPipeline })
+  r.land("feat: the endpoint (#1)")
+  const beta = cutBeta(r, "1.3.0-beta.1", 2)
+  r.land("chore(ci): repin the pipeline (#3)")
+  const needsRerun = {
+    kind: "pending",
+    reason: `pipeline / Check was cancelled on v1.3.0-beta.1 at ${beta.slice(0, 7)} and has to be re-run; the Release PR waits for a green v1.3.0-beta.1`,
+  }
+
+  // dev will not replace this beta (the test above), so the reason must not say it will.
+  r.gh.refCheckRuns.set(beta, [cancelledRun])
+  assert.deepEqual(await r.sync(null, null, "main"), needsRerun)
+  r.gh.refCheckRuns.set(beta, [cancelledRun, skippedRun])
+  assert.deepEqual(await r.sync(null, null, "main"), needsRerun)
+  assert.equal(r.gh.pulls.size, 0, "a beta without a green Check is never promoted")
+
+  // Run again and green: promoted like any other beta.
+  r.gh.refCheckRuns.set(beta, [cancelledRun, skippedRun, greenRun])
+  const out = pr(await r.sync(null, null, "main"))
+  assert.equal(out.mode, "promotion")
+  assert.equal(out.sourceRef, "v1.3.0-beta.1")
 })
 
 test("once the replacement is cut and green, main promotes it and the red beta is history", async () => {

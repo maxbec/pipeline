@@ -298,19 +298,29 @@ pipeline, a test that fails on exactly that tree. A rerun checks the same
 commit again, so the promotion would wait for good, while the repair on `dev`
 is a `chore(ci)` and by the first rule no release. The train therefore treats
 the last beta of `dev` as superseded when `pipeline / Check` on its commit ran
-to the end without passing (failed, timed out, cancelled) and `dev` has
-commits after it: they become the next beta of the same target
+to the end without passing (GitHub's conclusion `failure` or `timed_out`) and
+`dev` has commits after it: they become the next beta of the same target
 (`1.3.0-beta.1` is followed by `1.3.0-beta.2`), whatever their type. That
 Release PR says which beta it replaces, waits for a green `dev` tip like any
 other, and is merged by a person; `main` then promotes the new beta on its
 own green Check. Until then the promotion reports the red Check together with
 this way out.
 
-A beta whose Check is green, still running, being rerun or only skipped (the
-release event's run) is not superseded, and the first rule holds. A rerun
-that turns the old beta green after all makes it promotable again; a
-replacement Release PR already open on `dev` then stays open and is the
-owner's to merge or close.
+A beta whose Check is green, still running, being rerun, only skipped (the
+release event's run) or cancelled is not superseded, and the first rule
+holds. A rerun that turns the old beta green after all makes it promotable
+again; a replacement Release PR already open on `dev` then stays open and is
+the owner's to merge or close.
+
+**A cancelled Check is not a red one.** It did not run to its end: a person
+stopped the run, or GitHub did, and the same commit can pass when the run is
+started again. Where a release waits for such a commit, on the tip of `dev`
+or on the beta `main` promotes, the train reports `pipeline / Check was
+cancelled on … and has to be re-run` and names no replacement, because none
+comes. Nothing starts the run again by itself: `gh run rerun <run id>`. Only
+the conclusion GitHub reports is read, not what caused it, and one run on the
+same commit that did end in `failure` makes the commit red whatever was
+cancelled beside it.
 
 `release_as` is no way around a red beta on `dev`: Guard admits only a stable
 `X.Y.Z` there, and in a repository that has `dev` the train gives a stable
