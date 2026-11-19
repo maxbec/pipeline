@@ -184,8 +184,10 @@ ask for more than its caller grants, and one that does fails to start.
 full marker yet: nobody ran the full Check on it since the last merge, or the
 nightly run has not come round. The Check fails within seconds, on the
 one-core runner, without running anything, and its error names the command
-above. Run it; once it is green, Recheck Release PR re-runs the Release PR's
-Pipeline run. By hand, re-run **all jobs** of that run (`gh run rerun <id>`):
+above. Where the train runs, its Verify job starts that run by itself
+([Verify](#verify)); anywhere else, run it. Once it is green, Recheck Release
+PR re-runs the Release PR's Pipeline run. By hand, re-run **all jobs** of that
+run (`gh run rerun <id>`):
 re-running only the failed Check repeats Guard's old answer. The same error
 with "the … API did not answer" means Guard could not look; re-running all
 jobs is enough.
@@ -245,7 +247,7 @@ runs two steps over the whole repository — the event is only a poke:
 
 | trigger | why |
 |---|---|
-| `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. A red pull request run starts the Fix, below; cancelled and release runs start nothing |
+| `workflow_run`: `Pipeline` completed | a green Check on a pull request, or a green push run on `dev` / `main`. A red pull request run starts the Fix, below, or Verify when it is a Release PR's; cancelled and release runs start nothing |
 | `workflow_dispatch` | after resolving review threads or removing a label without a push: `gh workflow run train.yaml` |
 | `schedule`, four times a day (`17 */6 * * *`) | what no event reports: every finished Pipeline run starts the train already. The renderer removes this block where the owner's central sweep (`train-sweep.yaml` in this repository) covers the repository |
 
@@ -263,6 +265,8 @@ Controls:
   and so could have rewritten its own Check). A person merges it.
 - Variable **`TRAIN`** = `off` (repository or organization): the caller's job
   is skipped, no runner starts. Any other value, or none, means on.
+- Variable **`TRAIN_VERIFY`** = `off`: the Verify job alone is skipped, see
+  [Verify](#verify).
 - Secrets **`TRAIN_APP_ID`** and **`TRAIN_APP_PRIVATE_KEY`**: the GitHub App
   the train acts as. Everything it writes goes through that App's installation
   token, scoped to the one repository; the job's own token is `contents: read`.
@@ -315,6 +319,48 @@ owner's to merge or close.
 `release_as` is no way around a red beta on `dev`: Guard admits only a stable
 `X.Y.Z` there, and in a repository that has `dev` the train gives a stable
 override to `main` alone.
+
+### Verify
+
+In a repository with two Check depths a Release PR is red, "Not fully
+verified", until the tip of its base has passed the full Check, and no merge
+starts that Check. `train / Verify` does: it starts the Pipeline on the base
+branch, which is a full Check, and Recheck Release PR turns the Release PR
+green when that run is.
+
+The job starts on a Release PR's Pipeline run that concluded `failure`, and
+on the caller's dispatch and schedule, which pick up what an event missed. It
+looks at every open Release PR (head `release/<base>` in this repository) and
+reads Guard's answer off the Release PR's own run: the Check job failed in its
+step "Not fully verified". Any other Release PR is left alone. Then, for the
+tip of the base branch:
+
+| the tip's full Check (a dispatch or the nightly run, whoever started it) | Verify | row |
+|---|---|---|
+| none | starts one | `started` |
+| queued or running | nothing | `running` |
+| green | nothing; Recheck re-runs the Release PR | `verified` |
+| red | nothing more for this commit, and one comment on the Release PR that names the failed step. A red full Check is a defect on the base, fixed through a pull request; its merge moves the tip, and the new tip is verified again. A flake: re-run the failed job of that run | `failed` |
+| ended twice without a verdict (cancelled, timed out) | nothing | `gave_up` |
+
+A merge into the base moves the tip while a full Check may still be running.
+The runs this App started for a commit the branch has left behind are
+cancelled first: they can no longer turn the Release PR green, and the caller
+queues one dispatch behind the other. A run a person started is never
+cancelled.
+
+Verify decides no gate. Whether a Release PR is verified stays Guard's answer,
+and nothing here makes a Release PR green or lets a release through.
+
+**What it costs.** One full Check per merge into the base, or the part of one
+that ran before the next merge, and a minute of the one-core runner per failed
+Release PR run. Variable **`TRAIN_VERIFY`** = `off` (repository or
+organization) skips the job, no runner starts, and the full Check is started
+by hand again: `gh workflow run ci.yaml --ref <base> -R <owner/repo>`.
+
+The App needs the repository permission **Actions: read and write**, as the
+Fix does. Without it GitHub refuses the dispatch: the row says `refused` and
+the job fails.
 
 ### Fix
 
@@ -391,8 +437,8 @@ repositories only.
 ## Repository variables and secrets
 
 Variables (`vars.*`): `PIPELINE_RUNNER` (JSON array of labels), `PIPELINE_SLIM`
-(`off` moves the one-core jobs to ubuntu-latest) and `TRAIN` (`off` stops the
-train, see above). In a Free org,
+(`off` moves the one-core jobs to ubuntu-latest), `TRAIN` (`off` stops the
+train, see above) and `TRAIN_VERIFY` (`off` stops its Verify job alone). In a Free org,
 org-level values are invisible to private repositories: set it per repository.
 The `INFISICAL_*` variables are no longer read.
 

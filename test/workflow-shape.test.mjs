@@ -608,7 +608,7 @@ test("the train is a second reusable workflow whose jobs are all read-only", () 
   assert.equal(doc.name, "Train")
   assert.deepEqual(Object.keys(doc.on), ["workflow_call"], "workflow_call only")
   assert.deepEqual(doc.permissions, {}, "nothing at the top level")
-  assert.deepEqual(Object.keys(doc.jobs), ["train", "fix-triage", "fix-propose", "fix-commit"])
+  assert.deepEqual(Object.keys(doc.jobs), ["train", "verify", "fix-triage", "fix-propose", "fix-commit"])
   for (const [id, j] of Object.entries(doc.jobs)) {
     assert.deepEqual(j.permissions, { contents: "read" }, `${id}: the job's own token only reads`)
   }
@@ -652,7 +652,7 @@ test("PIPELINE_SLIM = off moves every one-core job to ubuntu-latest, and only th
     doc.jobs.guard.outputs["check-runner"],
     ...Object.values(train.jobs).map((j) => j["runs-on"]),
   ].filter((r) => typeof r === "string" && r.includes("ubuntu-slim"))
-  assert.equal(slimJobs.length, 6, "Guard, Recheck, the Check that only reports, and the train's three jobs")
+  assert.equal(slimJobs.length, 7, "Guard, Recheck, the Check that only reports, and the train's four jobs")
   for (const runner of slimJobs) {
     assert.match(runner, /vars\.PIPELINE_SLIM == 'off' && '(\[")?ubuntu-latest("\])?'/, runner)
     // The switch names no label of its own: a variable anyone with write
@@ -661,7 +661,7 @@ test("PIPELINE_SLIM = off moves every one-core job to ubuntu-latest, and only th
   }
   assert.equal(
     [...JSON.stringify(doc.jobs).matchAll(/ubuntu-slim/g)].length + [...JSON.stringify(train.jobs).matchAll(/ubuntu-slim/g)].length,
-    6,
+    7,
     "no job names the one-core runner without the switch",
   )
 })
@@ -858,6 +858,90 @@ test("the central sweep runs only here, on a timer or by hand, GitHub-hosted", (
   assert.equal(run.env.GH_TOKEN, "${{ steps.app-token.outputs.token }}")
   assert.equal(run.env.SWEEP_SELF, "${{ github.repository }}")
   assert.ok(existsSync(join(ROOT, "scripts/train-sweep.sh")))
+})
+
+// ---- Verify ----------------------------------------------------------------
+
+const verifyJob = () => yaml(TRAIN).jobs.verify
+
+test("Verify starts on a Release PR's failed Pipeline run, a dispatch or the schedule, and has its own switch", () => {
+  const job = verifyJob()
+  assert.equal(job.name, "Verify")
+  assert.equal(
+    String(job.if).replace(/\s+/g, " "),
+    "vars.TRAIN_VERIFY != 'off' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'failure' && github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'release/')))",
+    "the switch sits on the job, so no runner starts; a green or cancelled Release PR run starts none either",
+  )
+  // The two jobs a red pull request run can start never both start: Fix
+  // (triage) names the release head as one it leaves alone.
+  assert.match(String(yaml(TRAIN).jobs["fix-triage"].if), /!startsWith\(github\.event\.workflow_run\.head_branch, 'release\/'\)/)
+  assert.equal(job["runs-on"], TRAIN_RUNNER, "API calls only: the one-core runner")
+  assert.equal(job["timeout-minutes"], 5)
+  assert.equal(job.needs, undefined, "it waits for no other job")
+  // Two at once would both find no full Check of the tip and both start one.
+  assert.deepEqual(job.concurrency, { group: "train-verify-${{ github.repository }}", "cancel-in-progress": false })
+  assert.notEqual(job.concurrency.group, yaml(TRAIN).jobs.train.concurrency.group, "it never waits behind a merge")
+})
+
+test("Verify holds an App token that can start a run and comment, and checks out nothing but the train", () => {
+  const steps = verifyJob().steps
+  const [ready, ...rest] = steps
+  assert.deepEqual(ready, trainSteps()[0], "the same probe as the Train job")
+  for (const step of rest) assert.equal(step.if, READY, `step "${step.name}" would run without the secrets`)
+
+  const [mint, ...more] = usesStep(steps, "actions/create-github-app-token")
+  assert.ok(mint && more.length === 0, "exactly one App-token step")
+  assert.equal(mint.uses, usesStep(trainSteps(), "actions/create-github-app-token")[0].uses, "one pin")
+  assert.deepEqual(mint.with, {
+    "app-id": "${{ secrets.TRAIN_APP_ID }}",
+    "private-key": "${{ secrets.TRAIN_APP_PRIVATE_KEY }}",
+    "permission-actions": "write",
+    "permission-contents": "read",
+    "permission-pull-requests": "write",
+    "permission-issues": "write",
+  })
+
+  const checkouts = usesStep(steps, "actions/checkout")
+  assert.equal(checkouts.length, 1, "the repository itself is never checked out")
+  assert.deepEqual(checkouts[0], usesStep(trainSteps(), "actions/checkout")[1], "the train's code at the pinned commit, as the Train job takes it")
+  assert.deepEqual(usesStep(steps, "actions/setup-node")[0], usesStep(trainSteps(), "actions/setup-node")[0])
+
+  const run = steps.at(-1)
+  assert.equal(run.name, "Verify")
+  assert.equal(run.run.trim(), "node .pipeline/train/bin/verify.ts")
+  assert.deepEqual(run.env, {
+    GITHUB_TOKEN: "${{ steps.app-token.outputs.token }}",
+    TRAIN_APP_SLUG: "${{ steps.app-token.outputs.app-slug }}",
+  })
+  assert.equal(run["continue-on-error"], undefined, "a refused dispatch fails the job")
+  assert.ok(existsSync(join(ROOT, "train/bin/verify.ts")))
+})
+
+// Verify reads Guard's answer off the Release PR's run by three names. They
+// are spelled in two files; this is what keeps them one.
+test("Verify knows the Pipeline, its Check job and the unverified step by the names the workflow gives them", () => {
+  const source = readFileSync(join(ROOT, "train/src/verify-run.ts"), "utf8")
+  const constant = (name) => {
+    const found = new RegExp(`export const ${name} = "([^"]+)"`).exec(source)
+    assert.ok(found, `${name} is not a string constant in train/src/verify-run.ts`)
+    return found[1]
+  }
+  const check = wf().jobs.check
+  const step = check.steps.find((s) => s.id === "unverified")
+  assert.equal(constant("UNVERIFIED_STEP"), step.name)
+  assert.equal(step.if, "needs.guard.outputs.unverified == 'true'", "the step runs, and fails, only for that answer")
+  assert.match(step.run, /exit 1\s*$/, "and it fails the job")
+  for (const caller of ["examples/caller.yaml", "ci.yaml"]) {
+    const doc = yaml(join(WORKFLOWS, caller))
+    assert.equal(constant("PIPELINE_WORKFLOW"), doc.name, caller)
+    assert.ok("workflow_dispatch" in doc.on, `${caller}: Verify starts the full Check with a dispatch`)
+    // The job name a run reports: the caller's job id, then the called job's name.
+    const triage = readFileSync(join(ROOT, "train/src/fix/triage.ts"), "utf8")
+    assert.ok(triage.includes(`export const CHECK_JOB = "${Object.keys(doc.jobs)[0]} / ${check.name}"`), caller)
+  }
+  // A dispatch and the nightly schedule are the events whose Check is the full one.
+  assert.match(source, /export const FULL_EVENTS = \["workflow_dispatch", "schedule"\]/)
+  assert.match(String(wf().jobs.recheck.if), /github\.event_name == 'workflow_dispatch' \|\| github\.event_name == 'schedule'/)
 })
 
 // ---- Fix -------------------------------------------------------------------

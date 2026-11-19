@@ -42,7 +42,8 @@ in turn.
 requests and pushes run that command (fast), and `test.command` runs only on a
 dispatch, a schedule and a hotfix (full). A Release PR is then green only when
 the tip of its base branch has passed the full Check; until then it is red
-within seconds as "not fully verified". Markers carry the depth
+within seconds as "not fully verified", and the train's Verify job starts that
+full Check by itself. Markers carry the depth
 (`pipeline-fast-tree-<tree sha>` beside the full name above), and a full run
 never stands down for a fast one. A promotion that cannot reuse its Release is
 checked in full as well. Without `test.pr_command` every Check is full, as

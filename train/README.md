@@ -19,10 +19,12 @@ src/policy.ts       which pull requests the Merge job may consider at all (pure)
 src/config.ts       the `release:` block of `.github/pipeline.yaml`, from JSON
 src/merge-run.ts    the Merge job; `bin/merge.ts` is its wrapper
 src/release-run.ts  the Release job; `bin/release.ts` is its wrapper
+src/verify-run.ts   the Verify job; `bin/verify.ts` is its wrapper
 src/entry.ts        what both entries share: environment, exit codes, quiet output
 src/git/lock.ts     git in a shared clone, serialized with flock
 bin/merge.ts        Actions entry: merge what is the train's to merge and green
 bin/release.ts      Actions entry: tag and publish a merged Release PR, keep the Release PRs
+bin/verify.ts       Actions entry: start the full Check a red Release PR is waiting for
 bin/merge-pr.ts     merge one PR through the rules by hand (`--auth gh|env`)
 test/               node:test; `workflow/fake-github.ts` is a GitHub over a real bare origin
 ```
@@ -50,19 +52,19 @@ them again; they need `git` and nothing else.
 
 ## The Actions entries
 
-Two scripts a workflow job runs. Each looks at the whole repository every
-time; the event that started the run is only a poke. Both take their input
+Three scripts a workflow job runs. Each looks at the whole repository every
+time; the event that started the run is only a poke. All take their input
 from the environment and one flag.
 
 | Variable | Entry | |
 |---|---|---|
-| `GITHUB_TOKEN` | both | required; the token every call is made with |
-| `GITHUB_REPOSITORY` | both | required; `owner/name` |
-| `TRAIN_DRY_RUN` | both | `1`: decide and report, write nothing |
-| `GITHUB_STEP_SUMMARY` | both | when set, a markdown table is appended to it |
+| `GITHUB_TOKEN` | all | required; the token every call is made with |
+| `GITHUB_REPOSITORY` | all | required; `owner/name` |
+| `TRAIN_DRY_RUN` | all | `1`: decide and report, write nothing |
+| `GITHUB_STEP_SUMMARY` | all | when set, a markdown table is appended to it |
 | `TRAIN_CLONE` | release | a full clone with tags (`fetch-depth: 0`); defaults to the working directory |
 | `TRAIN_RELEASE_CONFIG` | release | the `release:` block of `.github/pipeline.yaml` as JSON (a `yq` step produces it); unset or `null` is the defaults |
-| `TRAIN_APP_SLUG` | release | the train's GitHub App, without `[bot]`; a Release PR merged by it is refused |
+| `TRAIN_APP_SLUG` | release, verify | the train's GitHub App, without `[bot]`. Release: a Release PR merged by it is refused. Verify: only the runs it started are cancelled, and without it none is |
 
 `--quiet` prints one JSON object of counts and nothing else: no pull request
 number, title, branch, version or error text, on stdout, stderr or in the step
@@ -162,6 +164,41 @@ version on another commit than the merge (`error`), a Release PR merged by
 `${TRAIN_APP_SLUG}[bot]` (`refused`: no tag, no release; a Release PR is
 merged by a person), a backmerge that could not be opened, or an unexpected
 error.
+
+### `bin/verify.ts`
+
+```sh
+GITHUB_TOKEN=… GITHUB_REPOSITORY=acme/widgets TRAIN_APP_SLUG=train-acme node train/bin/verify.ts [--quiet]
+```
+
+For every open Release PR (head `release/<base>` in this repository):
+
+1. **Is it red as "Not fully verified"?** The newest Pipeline run a pull
+   request event started on its head must have concluded `failure`, in the
+   step `Not fully verified` of `pipeline / Check`. That is Guard's answer,
+   read off the run; the marker rule is not derived a second time. Anything
+   else is **skipped**.
+2. **Does the tip of the base have a full Check?** A run of the same workflow
+   on the tip that a dispatch or the schedule started, whoever started it.
+   Queued or running: **running**. Green: **verified**, and the pipeline's
+   Recheck job re-runs the Release PR. Red: **failed**, with one comment on
+   the Release PR that names the failed step, and no second run of that
+   commit. Two that ended without a verdict: **gave_up**.
+3. **None: start it.** The workflow is dispatched on the base branch, which
+   runs the full Check: **started**. A dispatch GitHub refuses (the App may
+   not write Actions, or the caller takes no dispatch) is **refused**.
+
+Before step 2 the full Checks `${TRAIN_APP_SLUG}[bot]` started on that branch
+for a commit it has left behind are cancelled, and listed in the row as
+`cancelled`. A person's run is never cancelled.
+
+Output: one JSON line per Release PR,
+`{"number":41,"base":"dev","action":"started","reason":"…"}`. The token needs
+`actions: write`, `contents: read` and, for the comment, `pull-requests: write`
+and `issues: write`.
+
+Exit 1: a refused dispatch, or an unexpected error. A red or unverified base
+is not a failure of this entry.
 
 ## Fix
 

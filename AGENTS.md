@@ -16,7 +16,7 @@ ADR 0003/0004/0009 and 0026–0028). Flaiky's runtime is retired.
 .github/workflows/universal-pipeline.yaml   the three jobs and the recheck; all logic is inline `run:` blocks
 .github/workflows/examples/caller.yaml      the caller every repository carries (rendered by train/bin/migrate-repos.ts)
 .github/workflows/ci.yaml                   this repo's caller: uses ./.github/workflows/universal-pipeline.yaml
-.github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge) and the three Fix jobs, all running train/bin
+.github/workflows/train.yaml                the release train: a second reusable workflow; Train (release, merge), Verify (starts the full Check a Release PR waits for) and the three Fix jobs, all running train/bin
 .github/workflows/examples/train-caller.yaml   its caller (workflow_run, dispatch, schedule; never pull_request)
 .github/workflows/train-self.yaml           this repo's Train caller: uses ./.github/workflows/train.yaml
 .github/workflows/train-sweep.yaml          central sweep over the owner's other repositories; runs scripts/train-sweep.sh
