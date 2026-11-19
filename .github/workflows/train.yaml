@@ -246,10 +246,14 @@ jobs:
             echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
           fi
 
-      # Starting and cancelling a run needs actions: write, and the job's own
-      # token only reads, as everywhere in the train. contents: read is for
-      # the base branch's tip; the other two are for the one comment about a
-      # red full Check.
+      # Starting and cancelling a run needs Actions: write, and the job's own
+      # token only reads, as everywhere in the train. The token is asked for
+      # as the Train job asks, with no permission-* input: naming
+      # actions: write fails the step outright (422) where the App's
+      # installation holds only Actions: read, and that would turn this job
+      # red in every repository of that owner, including the many that never
+      # have anything to verify. This way an App that may not start a run is
+      # reported where it matters: `refused`, exit 1, when a Release PR waits.
       - name: Mint the App token
         id: app-token
         if: steps.ready.outputs.ready == 'true'
@@ -257,10 +261,6 @@ jobs:
         with:
           app-id: ${{ secrets.TRAIN_APP_ID }}
           private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
-          permission-actions: write
-          permission-contents: read
-          permission-pull-requests: write
-          permission-issues: write
 
       - name: Checkout the train
         if: steps.ready.outputs.ready == 'true'

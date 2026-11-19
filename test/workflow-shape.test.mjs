@@ -883,7 +883,13 @@ test("Verify starts on a Release PR's failed Pipeline run, a dispatch or the sch
   assert.notEqual(job.concurrency.group, yaml(TRAIN).jobs.train.concurrency.group, "it never waits behind a merge")
 })
 
-test("Verify holds an App token that can start a run and comment, and checks out nothing but the train", () => {
+// The token is asked for without a permission-* input, like the Train job's.
+// Asking for actions: write by name fails the step (422) where the App's
+// installation holds only Actions: read, which is the navigaite App as of
+// 2026-11-19: Verify would be red on every dispatch and schedule there, in
+// repositories that have nothing to verify. Unnamed, the lack shows up as a
+// refused dispatch, and only where a Release PR waits.
+test("Verify holds the App token the Train job holds, and checks out nothing but the train", () => {
   const steps = verifyJob().steps
   const [ready, ...rest] = steps
   assert.deepEqual(ready, trainSteps()[0], "the same probe as the Train job")
@@ -895,11 +901,8 @@ test("Verify holds an App token that can start a run and comment, and checks out
   assert.deepEqual(mint.with, {
     "app-id": "${{ secrets.TRAIN_APP_ID }}",
     "private-key": "${{ secrets.TRAIN_APP_PRIVATE_KEY }}",
-    "permission-actions": "write",
-    "permission-contents": "read",
-    "permission-pull-requests": "write",
-    "permission-issues": "write",
   })
+  assert.deepEqual(mint.with, usesStep(trainSteps(), "actions/create-github-app-token")[0].with)
 
   const checkouts = usesStep(steps, "actions/checkout")
   assert.equal(checkouts.length, 1, "the repository itself is never checked out")

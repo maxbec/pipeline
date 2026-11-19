@@ -359,8 +359,11 @@ organization) skips the job, no runner starts, and the full Check is started
 by hand again: `gh workflow run ci.yaml --ref <base> -R <owner/repo>`.
 
 The App needs the repository permission **Actions: read and write**, as the
-Fix does. Without it GitHub refuses the dispatch: the row says `refused` and
-the job fails.
+Fix does. The job asks for the App's token without naming a permission, as
+the Train job does, so an App that holds only Actions: read does not fail it
+in a repository where nothing waits. Where a Release PR does wait, GitHub
+refuses the dispatch: the row says `refused`, names the permission, and the
+job fails until the App has it or `TRAIN_VERIFY` is `off` there.
 
 ### Fix
 

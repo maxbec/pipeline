@@ -195,7 +195,8 @@ for a commit it has left behind are cancelled, and listed in the row as
 Output: one JSON line per Release PR,
 `{"number":41,"base":"dev","action":"started","reason":"…"}`. The token needs
 `actions: write`, `contents: read` and, for the comment, `pull-requests: write`
-and `issues: write`.
+and `issues: write`. With `actions: read` only, every row but **started** still
+comes out right, and the dispatch is **refused** with the permission named.
 
 Exit 1: a refused dispatch, or an unexpected error. A red or unverified base
 is not a failure of this entry.

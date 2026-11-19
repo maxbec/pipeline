@@ -4,6 +4,7 @@ import { GitHubClient } from "../src/github/client.ts"
 import {
   failedMarker,
   MAX_LOST_RUNS,
+  NEEDS_ACTIONS_WRITE,
   PIPELINE_WORKFLOW,
   runVerify,
   UNVERIFIED_STEP,
@@ -501,6 +502,8 @@ test("a dispatch GitHub refuses is reported and fails the run; it is not retried
     assert.match(String(result.rows[0]?.reason), /GitHub refused to start the full Check of dev at aaaaaaa/)
     assert.equal(result.failed, true, "an App without the Actions permission must not pass in silence")
     assert.equal(result.error, undefined)
+    // Only a 403 is about the App's permission; the other two are about the caller.
+    assert.equal(String(result.rows[0]?.reason).includes(NEEDS_ACTIONS_WRITE), status === 403, String(status))
   }
 })
 

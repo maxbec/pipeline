@@ -50,6 +50,9 @@ export const FULL_EVENTS = ["workflow_dispatch", "schedule"]
  * must not turn into a run per poke.
  */
 export const MAX_LOST_RUNS = 2
+/** What a 403 on the dispatch means in practice, and the two ways out. */
+export const NEEDS_ACTIONS_WRITE =
+  "The train's App needs the repository permission Actions: read and write to start a run; grant it, or set the variable TRAIN_VERIFY to off here."
 
 export const VERIFY_ACTIONS = [
   "started",
@@ -334,7 +337,8 @@ async function verifyPull(input: VerifyRunInput, pull: ReleasePull): Promise<Ver
     // 403: the App may not write Actions. 404 and 422: the caller cannot be
     // dispatched. None of them gets better by trying again.
     if (error instanceof GitHubHttpError && [403, 404, 422].includes(error.status)) {
-      return row("refused", `GitHub refused to start the full Check of ${at}: ${error.message}`, cancelled)
+      const hint = error.status === 403 ? ` ${NEEDS_ACTIONS_WRITE}` : ""
+      return row("refused", `GitHub refused to start the full Check of ${at}: ${error.message}.${hint}`, cancelled)
     }
     throw error
   }
