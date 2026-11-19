@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.8.0-beta.1](https://github.com/maxbec/pipeline/compare/v5.7.3...v5.8.0-beta.1) (2026-11-19)
+
+
+### ✨ Features
+
+* **train:** start the full Check a Release PR waits for ([#199](https://github.com/maxbec/pipeline/issues/199)) ([303e921](https://github.com/maxbec/pipeline/commit/303e921541b860146df049742f7d2e1f4d3f2e83))
+
 ## [5.7.3](https://github.com/maxbec/pipeline/compare/v5.7.2...v5.7.3) (2026-11-18)
 
 
