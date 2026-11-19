@@ -10,6 +10,10 @@
 # Both look at the whole repository (every open pull request, both branches);
 # the event that started the run is only a poke.
 #
+# The Verify job (verify.ts) starts the full Check a Release PR is waiting
+# for: a Release PR over a base that has not passed the full Check is red,
+# "Not fully verified", and that Check runs only when someone starts it.
+#
 # Three more jobs are the Fix, for a Pipeline run whose Check failed on a pull
 # request (fix.ts): the failed jobs are rerun once, unless the step that failed
 # was Lint, Test or Build — the same commit fails those the same way. For
@@ -184,6 +188,106 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: node .pipeline/train/bin/merge.ts
+
+  # ---- Verify ---------------------------------------------------------------
+  # Starts the full Check a Release PR is waiting for. In a repository with
+  # two Check depths a Release PR fails at once, "Not fully verified", until
+  # the tip of its base has passed the full Check, and that Check runs on a
+  # dispatch or at night, never after a merge. This job is the dispatch nobody
+  # has to type. Woken by the Release PR's red run, it starts the Pipeline on
+  # the base branch: once per commit, never again after a red one. The full
+  # Checks it started itself for commits a merge has since left behind are
+  # cancelled. When the run is green, the pipeline's Recheck job re-runs the
+  # Release PR.
+  #
+  # It decides no gate: whether a Release PR is verified is Guard's answer,
+  # and here it is only read (train/src/verify-run.ts). API calls only;
+  # nothing of the repository is checked out.
+  #
+  # Every merge into the base costs a full Check here, or the part of one that
+  # ran before the next merge. The variable TRAIN_VERIFY = off stops this job
+  # without stopping the train; the full Check is then started by hand again.
+  verify:
+    name: Verify
+    # Exactly `failure` on a `release/*` head: the one run this job answers.
+    # A dispatch and the schedule are pokes that pick up what an event missed.
+    if: >-
+      vars.TRAIN_VERIFY != 'off' &&
+      (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      startsWith(github.event.workflow_run.head_branch, 'release/')))
+    # API calls only, so the small runner; see the Train job.
+    runs-on: >-
+      ${{ fromJSON((github.event.repository.private && vars.PIPELINE_RUNNER)
+      || (vars.PIPELINE_SLIM == 'off' && '["ubuntu-latest"]') || '["ubuntu-slim"]') }}
+    timeout-minutes: 5
+    # One at a time: two of them would both find no full Check and both start one.
+    concurrency:
+      group: train-verify-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - name: Check for the App secrets
+        id: ready
+        shell: bash
+        env:
+          APP_ID: ${{ secrets.TRAIN_APP_ID }}
+          APP_PRIVATE_KEY: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APP_ID" && -n "$APP_PRIVATE_KEY" ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::TRAIN_APP_ID or TRAIN_APP_PRIVATE_KEY is not set; the train does nothing here."
+          fi
+
+      # Starting and cancelling a run needs Actions: write, and the job's own
+      # token only reads, as everywhere in the train. The token is asked for
+      # as the Train job asks, with no permission-* input: naming
+      # actions: write fails the step outright (422) where the App's
+      # installation holds only Actions: read, and that would turn this job
+      # red in every repository of that owner, including the many that never
+      # have anything to verify. This way an App that may not start a run is
+      # reported where it matters: `refused`, exit 1, when a Release PR waits.
+      - name: Mint the App token
+        id: app-token
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.TRAIN_APP_ID }}
+          private-key: ${{ secrets.TRAIN_APP_PRIVATE_KEY }}
+
+      - name: Checkout the train
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: maxbec/pipeline
+          ref: ${{ job.workflow_sha }}
+          path: .pipeline
+          sparse-checkout: train
+          persist-credentials: false
+
+      - name: Set up Node.js
+        if: steps.ready.outputs.ready == 'true'
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24.x
+          check-latest: true
+
+      # TRAIN_APP_SLUG names whose runs may be cancelled: the App's own.
+      - name: Verify
+        id: verify
+        if: steps.ready.outputs.ready == 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          TRAIN_APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: node .pipeline/train/bin/verify.ts
 
   # ---- Fix ------------------------------------------------------------------
   # Decides what a failed run needs. Reads the pull request, the run and the
