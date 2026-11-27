@@ -8,6 +8,7 @@ import { canMerge, REQUIRED_CHECKS } from "../../src/github/pr.ts"
 import {
   applyPlan,
   convertConfig,
+  dropLegacyIgnores,
   MIGRATION_BRANCH,
   MIGRATION_TITLE,
   planRepository,
@@ -1177,6 +1178,114 @@ test("extra legacy paths from the overrides file are deleted like the built-in o
     ),
     true,
   )
+})
+
+const PRETTIER_IGNORE = `node_modules/
+
+# flama-delivery:start
+.flama/
+.oldtool/
+.github/workflows/flama-*.yml
+.github/dependabot.yml
+.release-please-config.json
+scripts/delivery
+# flama-delivery:end
+`
+
+const TRUNK_IGNORES = `version: 0.1
+lint:
+  enabled:
+    - prettier@3.4.2
+  ignore:
+    - linters:
+        - prettier
+      paths:
+        - .flama/**
+        - ".oldtool/**"
+        - .github/dependabot.yml
+        - .release-please-manifest.json
+    - linters: [ALL]
+      paths:
+        - .flama/**
+`
+
+test("an ignore entry for a legacy path is dropped; every other line stays as written", () => {
+  assert.equal(
+    dropLegacyIgnores(".prettierignore", PRETTIER_IGNORE),
+    `node_modules/
+
+# flama-delivery:start
+.oldtool/
+.github/dependabot.yml
+scripts/delivery
+# flama-delivery:end
+`,
+  )
+  // A path from the overrides file counts like a built-in one.
+  assert.equal(
+    dropLegacyIgnores(".prettierignore", PRETTIER_IGNORE, [/^\.oldtool\//])?.includes(".oldtool/"),
+    false,
+  )
+  assert.equal(dropLegacyIgnores(".prettierignore", "node_modules/\n!.flama/keep\n"), null)
+})
+
+test("in the Trunk config only `paths` entries go, and a list is never left empty", () => {
+  assert.equal(
+    dropLegacyIgnores(".trunk/trunk.yaml", TRUNK_IGNORES, [/^\.oldtool\//]),
+    `version: 0.1
+lint:
+  enabled:
+    - prettier@3.4.2
+  ignore:
+    - linters:
+        - prettier
+      paths:
+        - .github/dependabot.yml
+    - linters: [ALL]
+      paths:
+        - .flama/**
+`,
+  )
+  // Not a `paths` list: the entry is somebody else's.
+  assert.equal(dropLegacyIgnores(".trunk/trunk.yaml", "lint:\n  enabled:\n    - .flama/**\n    - x\n"), null)
+})
+
+test("dead ignore entries ride along with a change and never start one", () => {
+  const ctx = { pin: PIN, template: TEMPLATE, overrides: {} }
+  const base = facts()
+  const moving = planRepository(
+    repository("widgets", "major", "acme"),
+    facts({
+      tree: [...base.tree, ".prettierignore"],
+      read: (p) => (p === ".prettierignore" ? PRETTIER_IGNORE : base.read(p)),
+    }),
+    ctx,
+  )
+  assert.equal(
+    moving.additions.find((a) => a.path === ".prettierignore")?.contents,
+    dropLegacyIgnores(".prettierignore", PRETTIER_IGNORE),
+  )
+
+  const settled = { branches: ["main"], protection: {}, openPulls: [] }
+  const first = planRepository(
+    repository("done", "small"),
+    facts({ ...settled, tree: [], read: () => null }),
+    ctx,
+  )
+  const written = new Map(first.additions.map((a) => [a.path, a.contents]))
+  written.set(".prettierignore", PRETTIER_IGNORE)
+  const second = planRepository(
+    repository("done", "small"),
+    facts({
+      ...settled,
+      tree: [...written.keys()],
+      read: (p) => written.get(p) ?? null,
+      settings: { ...facts().settings, ...first.settings } as never,
+    }),
+    ctx,
+  )
+  assert.deepEqual(second.additions, [])
+  assert.equal(second.idle, true)
 })
 
 test("both callers land in one commit and one PR; a rerun on matching files commits nothing; --remove-train deletes", async () => {

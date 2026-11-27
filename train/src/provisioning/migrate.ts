@@ -168,6 +168,65 @@ export function isLegacyPath(path: string, extra: RegExp[] = []): boolean {
   return LEGACY.some((re) => re.test(path)) || extra.some((re) => re.test(path))
 }
 
+/** Ignore files in gitignore syntax. Beside them, the `paths` lists of the Trunk config. */
+export const IGNORE_FILES = [".prettierignore"]
+
+const LIST_ITEM = /^(\s*)-\s+(["']?)(.+?)\2\s*$/
+
+/** Whether the list starting at `at` is the value of a `paths:` key. */
+function opensPaths(lines: string[], at: number, indent: number): boolean {
+  for (let i = at - 1; i >= 0; i--) {
+    const line = lines[i] ?? ""
+    if (/^\s*(?:#.*)?$/.test(line)) continue
+    const key = /^(\s*)(?:-\s+)?paths:\s*$/.exec(line)
+    return key !== null && (key[1] ?? "").length <= indent
+  }
+  return false
+}
+
+function withoutDeadPaths(lines: string[], dead: (entry: string) => boolean): string[] {
+  const out: string[] = []
+  for (let i = 0; i < lines.length; ) {
+    const indent = LIST_ITEM.exec(lines[i] ?? "")?.[1]
+    if (indent === undefined) {
+      out.push(lines[i] ?? "")
+      i++
+      continue
+    }
+    let end = i
+    while (end < lines.length && LIST_ITEM.exec(lines[end] ?? "")?.[1] === indent) end++
+    const run = lines.slice(i, end)
+    const live = opensPaths(lines, i, indent.length)
+      ? run.filter((line) => !dead(LIST_ITEM.exec(line)?.[3] ?? ""))
+      : run
+    // An empty `paths` list is one Trunk refuses, so a list of nothing else stays whole.
+    out.push(...(live.length === 0 ? run : live))
+    i = end
+  }
+  return out
+}
+
+/**
+ * The ignore file without its entries for a legacy path: the path is deleted, so the
+ * entry ignores nothing. Every other line stays as written. `null` when nothing goes.
+ */
+export function dropLegacyIgnores(
+  path: string,
+  contents: string,
+  extra: RegExp[] = [],
+): string | null {
+  const dead = (entry: string) => isLegacyPath(entry.replace(/^\//, ""), extra)
+  const lines = contents.split("\n")
+  const kept =
+    path === TRUNK_CONFIG_PATH
+      ? withoutDeadPaths(lines, dead)
+      : lines.filter((line) => {
+          const entry = line.trim()
+          return entry === "" || /^[#!]/.test(entry) || !dead(entry)
+        })
+  return kept.length === lines.length ? null : kept.join("\n")
+}
+
 export function baseFor(repository: Pick<Repository, "kind">): string {
   return repository.kind === "major" ? "dev" : "main"
 }
@@ -697,13 +756,15 @@ export async function readFacts(
     CALLER_PATH,
     TRAIN_CALLER_PATH,
     TRUNK_CONFIG_PATH,
+    ...IGNORE_FILES,
     ...AGENT_FILES,
     ...Object.keys(overrideFor(ctx, repository).extraFiles ?? {}),
   ]
+  // Agent and ignore files are written back as they are, so they are read byte-exact;
+  // the rendered files are compared without their trailing newline anyway.
+  const exact = [...AGENT_FILES, ...IGNORE_FILES, TRUNK_CONFIG_PATH]
   for (const path of wanted) {
-    // Agent files are written back as they are, so they are read byte-exact;
-    // the rendered files are compared without their trailing newline anyway.
-    const read = AGENT_FILES.includes(path) ? readTreeFileExact : readTreeFile
+    const read = exact.includes(path) ? readTreeFileExact : readTreeFile
     files.set(path, tree.includes(path) ? await read(repository.path, ref(source), path) : null)
   }
   const protection: Record<string, Protection> = {}
@@ -853,6 +914,16 @@ export function planRepository(repository: Repository, facts: RepoFacts, ctx: Pl
   const legacy = (p: string) =>
     isLegacyPath(p, ctx.legacyPaths) || (ctx.train?.mode === "remove" && p === TRAIN_CALLER_PATH)
   const deletions = facts.tree.filter((p) => legacy(p) && !desired.has(p)).sort()
+  // An ignore entry for a deleted path is a dead line, not a reason for a pull request:
+  // it goes with a commit the repository gets anyway and never starts one.
+  if (additions.length > 0 || deletions.length > 0) {
+    for (const path of [...IGNORE_FILES, TRUNK_CONFIG_PATH]) {
+      const current = desired.has(path) ? null : facts.read(path)
+      const next = current === null ? null : dropLegacyIgnores(path, current, ctx.legacyPaths)
+      if (next !== null) additions.push({ path, contents: next })
+    }
+    additions.sort((a, b) => a.path.localeCompare(b.path))
+  }
   const kept = facts.tree
     .filter((p) => p.startsWith(".github/workflows/") && !legacy(p) && !desired.has(p))
     .sort()
@@ -946,6 +1017,11 @@ function commitBody(plan: Plan, pin: PipelinePin): string {
   ]
   const agents = plan.additions.map((a) => a.path).filter((path) => AGENT_FILES.includes(path))
   if (agents.length > 0) lines.push(`${agents.join(", ")}: the pipeline section is current.`, "")
+  const ignores = plan.additions
+    .map((a) => a.path)
+    .filter((path) => IGNORE_FILES.includes(path) || path === TRUNK_CONFIG_PATH)
+  if (ignores.length > 0)
+    lines.push(`${ignores.join(", ")}: ignore entries for removed paths are gone.`, "")
   if (plan.deletions.length > 0) lines.push("Removed:", ...plan.deletions.map((d) => `- ${d}`), "")
   if (plan.kept.length > 0) lines.push("Left alone:", ...plan.kept.map((k) => `- ${k}`), "")
   lines.push("Written by train/bin/migrate-repos.ts (maxbec/pipeline).")
