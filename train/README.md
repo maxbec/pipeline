@@ -315,7 +315,7 @@ key is refused.
 | `repositories.<owner/name>.secrets` | a secret the Pipeline caller forwards, taken from a differently named repository secret; the name must be one the template forwards |
 | `repositories.<owner/name>.renderHook` | sets `deploy.render.hook: true` in `.github/pipeline.yaml` |
 | `repositories.<owner/name>.extraFiles` | path to contents, written beside the callers. A YAML file must start with `---`. A difference that is only a moved action pin is not written back |
-| `legacyPaths` | regular expressions over repository paths, deleted in addition to the built-in list |
+| `legacyPaths` | regular expressions over repository paths, deleted in addition to the built-in list. An entry for such a path in `.prettierignore` or in a `paths` list of `.trunk/trunk.yaml` goes with the next commit the tool writes; it never opens a pull request by itself |
 | `singleQuoteTrunkPlugins` | a `.trunk/trunk.yaml` that mentions one of these gets `.github/pipeline.yaml` single-quoted, for a plugin whose prettier config asks for that |
 
 ### Moving one repository to a beta pin
